@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<meta name="theme-color" content="#050609" />
+<meta name="color-scheme" content="dark" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="ATHENA" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/icons/icon-180.png" />
+<link rel="icon" href="/icons/icon-192.png" />
+<link rel="stylesheet" href="/styles.css?v=11" />
+<title>ATHENA</title>
+<style>
+  /* boot: black before the stylesheet paints, so there is no white flash */
+  html, body { background: #050609; }
+</style>
+</head>
+<body data-mode="basic" data-motion="2" data-accent="gold" data-art="on" data-glass="on">
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-eye" viewBox="0 0 40 40">
+      <path d="M20 1.5C21.6 12.8 27.2 18.4 38.5 20 27.2 21.6 21.6 27.2 20 38.5 18.4 27.2 12.8 21.6 1.5 20 12.8 18.4 18.4 12.8 20 1.5Z" fill="none" stroke="currentColor" stroke-width="0.9" stroke-linejoin="round" opacity=".7"/>
+      <path d="M8 20c3.6-4 7.6-6 12-6s8.4 2 12 6c-3.6 4-7.6 6-12 6s-8.4-2-12-6z" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <circle cx="20" cy="20" r="3.4" fill="none" stroke="currentColor" stroke-width="1"/>
+      <circle cx="20" cy="20" r="1.5" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24">
+      <path d="M12 1c.9 6.4 4.6 10.1 11 11-6.4.9-10.1 4.6-11 11-.9-6.4-4.6-10.1-11-11C7.4 11.1 11.1 7.4 12 1z" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-crown" viewBox="0 0 32 32">
+      <path d="M5 22 3 9l7 5 6-9 6 9 7-5-2 13z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+      <path d="M5 26h22" stroke="currentColor" stroke-width="1.2"/>
+    </symbol>
+
+    <!-- paint for the oculus emblem -->
+    <radialGradient id="oc-g-gold" cx="38%" cy="30%" r="78%">
+      <stop offset="0" stop-color="#fff9ea"/>
+      <stop offset=".38" stop-color="#f6d9a0"/>
+      <stop offset=".72" stop-color="#d8a94e"/>
+      <stop offset="1" stop-color="#8a5f16"/>
+    </radialGradient>
+    <radialGradient id="oc-g-halo">
+      <stop offset=".3" stop-color="#ffdf9e" stop-opacity=".5"/>
+      <stop offset=".66" stop-color="#d8a94e" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#d8a94e" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="oc-g-void" cx="42%" cy="36%" r="72%">
+      <stop offset="0" stop-color="#000000"/>
+      <stop offset=".6" stop-color="#010207"/>
+      <stop offset=".88" stop-color="#0a0a18"/>
+      <stop offset="1" stop-color="#1a1206"/>
+    </radialGradient>
+    <radialGradient id="oc-g-star">
+      <stop offset="0" stop-color="#fff6dd" stop-opacity=".85"/>
+      <stop offset=".32" stop-color="#f0cf90" stop-opacity=".44"/>
+      <stop offset=".72" stop-color="#c79a3f" stop-opacity=".14"/>
+      <stop offset="1" stop-color="#c79a3f" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="oc-g-sing">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".45" stop-color="#ffe6b0"/>
+      <stop offset="1" stop-color="#d8a94e" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="oc-g-arc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fffdf4"/>
+      <stop offset=".5" stop-color="#f8dcaa"/>
+      <stop offset="1" stop-color="#d8a94e" stop-opacity=".15"/>
+    </linearGradient>
+    <linearGradient id="oc-g-fx" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fff4d6" stop-opacity="0"/>
+      <stop offset=".3" stop-color="#ffe8bb" stop-opacity=".5"/>
+      <stop offset=".5" stop-color="#ffffff"/>
+      <stop offset=".7" stop-color="#ffe8bb" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#fff4d6" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="oc-g-fy" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff4d6" stop-opacity="0"/>
+      <stop offset=".34" stop-color="#ffe8bb" stop-opacity=".4"/>
+      <stop offset=".5" stop-color="#ffffff"/>
+      <stop offset=".66" stop-color="#ffe8bb" stop-opacity=".4"/>
+      <stop offset="1" stop-color="#fff4d6" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<!-- ─────────────────────────────────────────  ATMOSPHERE -->
+<div class="atmos" aria-hidden="true">
+  <div class="nebula"></div>
+  <div class="stars stars-a"></div>
+  <div class="stars stars-b"></div>
+  <div class="stars stars-c"></div>
+  <div class="horizon"></div>
+  <div class="atmos-sparks" id="sparks"></div>
+  <div class="glow-sweep"></div>
+  <div class="grain"></div>
+  <div class="vignette"></div>
+</div>
+
+<div class="frame" aria-hidden="true">
+  <span class="frame-edge"></span>
+  <span class="frame-corner fc-tl"></span>
+  <span class="frame-corner fc-tr"></span>
+  <span class="frame-corner fc-bl"></span>
+  <span class="frame-corner fc-br"></span>
+  <span class="frame-label frame-label-l">ATHENA // CORE OS 4.7</span>
+  <span class="frame-label frame-label-r">ENCRYPTED LAN · NO CLOUD</span>
+</div>
+
+<!-- ─────────────────────────────────────────  LOCK -->
+<div class="lock" id="lock">
+  <div class="lock-inner">
+    <div class="lock-core">
+      <div class="core core-lock" aria-hidden="true">
+        <span class="core-glow"></span>
+        <span class="core-ring ring-outer"></span>
+        <svg class="oculus" viewBox="0 0 400 400" aria-hidden="true" focusable="false">
+            <circle class="oc-ticks" cx="200" cy="200" r="197" pathLength="360"/>
+            <g class="oc-orbits">
+              <g transform="rotate(-16 200 200)">
+                <ellipse id="oc-p1a" cx="200" cy="200" rx="176" ry="52"/>
+                <circle class="oc-sat-dot" r="2.6"><animateMotion dur="26s" repeatCount="indefinite" rotate="auto"><mpath href="#oc-p1a"/></animateMotion></circle>
+              </g>
+              <g transform="rotate(31 200 200)">
+                <ellipse id="oc-p2a" cx="200" cy="200" rx="188" ry="86"/>
+                <circle class="oc-sat-dot dim" r="1.8"><animateMotion dur="46s" repeatCount="indefinite" rotate="auto"><mpath href="#oc-p2a"/></animateMotion></circle>
+              </g>
+              <g transform="rotate(-58 200 200)"><ellipse cx="200" cy="200" rx="142" ry="30"/></g>
+            </g>
+            <g class="oc-star">
+              <path class="oc-star-aura" d="M200 8C208 152 248 192 392 200 248 208 208 248 200 392 192 248 152 208 8 200 152 192 192 152 200 8Z"/>
+              <path class="oc-star-body" d="M200 8C208 152 248 192 392 200 248 208 208 248 200 392 192 248 152 208 8 200 152 192 192 152 200 8Z"/>
+              <path class="oc-star-line" pathLength="100" d="M200 8C208 152 248 192 392 200 248 208 208 248 200 392 192 248 152 208 8 200 152 192 192 152 200 8Z"/>
+            </g>
+            <g class="oc-eye">
+              <circle class="oc-eye-halo" cx="200" cy="200" r="96"/>
+              <circle class="oc-eye-ring-soft" cx="200" cy="200" r="73"/>
+              <circle class="oc-eye-lens" cx="200" cy="200" r="70"/>
+              <circle class="oc-eye-void" cx="200" cy="200" r="66"/>
+              <circle class="oc-eye-rim" cx="200" cy="200" r="66"/>
+              <circle class="oc-eye-arc" cx="200" cy="200" r="70" pathLength="300"/>
+              <circle class="oc-eye-arc2" cx="200" cy="200" r="79" pathLength="300"/>
+              <circle class="oc-pulse" cx="200" cy="200" r="72"/>
+              <circle class="oc-pulse p2" cx="200" cy="200" r="72"/>
+              <circle class="oc-eye-sing" cx="200" cy="200" r="6"/>
+            </g>
+            <g class="oc-dust">
+              <circle cx="200" cy="52" r="1.5"/><circle cx="298" cy="84" r="1.1"/><circle cx="344" cy="200" r="1.8"/><circle cx="308" cy="302" r="1.2"/>
+              <circle cx="212" cy="348" r="1.6"/><circle cx="104" cy="316" r="1"/><circle cx="56" cy="222" r="1.7"/><circle cx="92" cy="112" r="1.3"/>
+            </g>
+            <g class="oc-flare">
+              <rect x="18" y="199" width="364" height="2" fill="url(#oc-g-fx)"/>
+              <rect x="199" y="70" width="2" height="260" fill="url(#oc-g-fy)"/>
+            </g>
+          </svg>
+      </div>
+    </div>
+    <div class="lock-main">
+      <div class="brand lock-brand">
+        <span class="brand-mark"><svg><use href="#i-eye"/></svg></span>
+        <div>
+          <h1>ATHENA</h1>
+          <p class="micro">ADAPTIVE TASK &amp; HARDWARE EXECUTION NETWORK ASSISTANT</p>
+        </div>
+      </div>
+      <div class="lock-card">
+        <p class="micro panel-kicker">// AUTHENTICATION</p>
+        <p class="micro dim" id="lock-hint">ENTER ACCESS CODE</p>
+        <input id="code" inputmode="text" autocomplete="one-time-code" maxlength="12" placeholder="······" spellcheck="false" />
+        <p class="micro dim" id="lock-local" hidden></p>
+        <button class="btn solid" id="unlock">OPEN THE HUB</button>
+        <p class="micro dim" id="lock-msg">the hub is the ATHENA window on the main PC — the code is printed there, saved in athena\data\access-code.txt, and shown in SYSTEM → THIS HUB</p>
+      </div>
+      <p class="micro dim lock-foot">LOCAL NETWORK ONLY · NOTHING LEAVES YOUR MACHINES</p>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────────────────────────────────  APP -->
+<div class="app" id="app" hidden>
+  <header class="top">
+    <div class="brand small">
+      <span class="brand-mark"><svg><use href="#i-eye"/></svg></span>
+      <div>
+        <h1>ATHENA</h1>
+        <p class="micro" id="hub-line">HUB · —</p>
+      </div>
+    </div>
+    <div class="top-mid">
+      <span class="top-slash"></span>
+      <span class="micro top-signal"><i class="dot"></i>SIGNAL LOCKED</span>
+    </div>
+    <div class="top-right">
+      <div class="mode" id="mode" role="group" aria-label="Interface detail">
+        <span class="mode-glide" aria-hidden="true"></span>
+        <button data-mode="basic" class="on" title="Simple, phone-first">BASIC</button>
+        <button data-mode="advanced" title="Every control, big screens">ADV</button>
+      </div>
+      <button class="pill" id="speak-toggle" title="Spoken replies">VOICE <b>OFF</b></button>
+      <button class="pill" id="refresh">SYNC</button>
+    </div>
+  </header>
+
+  <main id="views">
+    <!-- HOME -->
+    <section class="view" data-view="home">
+      <div class="hero">
+        <div class="hero-grid" aria-hidden="true"></div>
+        <div class="hero-beam" aria-hidden="true"></div>
+        <div class="hero-bar">
+          <p class="micro kicker">SYS.04 <span class="sep">//</span> ATHENA CORE</p>
+          <span class="hero-barcode" aria-hidden="true"></span>
+          <p class="micro dim" id="net-line">STANDING BY</p>
+        </div>
+
+        <div class="hero-main">
+          <div class="core-stage">
+            <div class="core" id="hero-core" aria-hidden="true">
+              <span class="core-glow"></span>
+              <span class="core-ring ring-outer"></span>
+              <svg class="oculus" viewBox="0 0 400 400" aria-hidden="true" focusable="false">
+            <circle class="oc-ticks" cx="200" cy="200" r="197" pathLength="360"/>
+            <g class="oc-orbits">
+              <g transform="rotate(-16 200 200)">
+                <ellipse id="oc-p1b" cx="200" cy="200" rx="176" ry="52"/>
+                <circle class="oc-sat-dot" r="2.6"><animateMotion dur="26s" repeatCount="indefinite" rotate="auto"><mpath href="#oc-p1b"/></animateMotion></circle>
+              </g>
+              <g transform="rotate(31 200 200)">
+                <ellipse id="oc-p2b" cx="200" cy="200" rx="188" ry="86"/>
+                <circle class="oc-sat-dot dim" r="1.8"><animateMotion dur="46s" repeatCount="indefinite" rotate="auto"><mpath href="#oc-p2b"/></animateMotion></circle>
+              </g>
+              <g transform="rotate(-58 200 200)"><ellipse cx="200" cy="200" rx="142" ry="30"/></g>
+            </g>
+            <g class="oc-star">
+              <path class="oc-star-aura" d="M200 8C208 152 248 192 392 200 248 208 208 248 200 392 192 248 152 208 8 200 152 192 192 152 200 8Z"/>
+              <path class="oc-star-body" d="M200 8C208 152 248 192 392 200 248 208 208 248 200 392 192 248 152 208 8 200 152 192 192 152 200 8Z"/>
+              <path class="oc-star-line" pathLength="100" d="M200 8C208 152 248 192 392 200 248 208 208 248 200 392 192 248 152 208 8 200 152 192 192 152 200 8Z"/>
+            </g>
+            <g class="oc-eye">
+              <circle class="oc-eye-halo" cx="200" cy="200" r="96"/>
+              <circle class="oc-eye-ring-soft" cx="200" cy="200" r="73"/>
+              <circle class="oc-eye-lens" cx="200" cy="200" r="70"/>
+              <circle class="oc-eye-void" cx="200" cy="200" r="66"/>
+              <circle class="oc-eye-rim" cx="200" cy="200" r="66"/>
+              <circle class="oc-eye-arc" cx="200" cy="200" r="70" pathLength="300"/>
+              <circle class="oc-eye-arc2" cx="200" cy="200" r="79" pathLength="300"/>
+              <circle class="oc-pulse" cx="200" cy="200" r="72"/>
+              <circle class="oc-pulse p2" cx="200" cy="200" r="72"/>
+              <circle class="oc-eye-sing" cx="200" cy="200" r="6"/>
+            </g>
+            <g class="oc-dust">
+              <circle cx="200" cy="52" r="1.5"/><circle cx="298" cy="84" r="1.1"/><circle cx="344" cy="200" r="1.8"/><circle cx="308" cy="302" r="1.2"/>
+              <circle cx="212" cy="348" r="1.6"/><circle cx="104" cy="316" r="1"/><circle cx="56" cy="222" r="1.7"/><circle cx="92" cy="112" r="1.3"/>
+            </g>
+            <g class="oc-flare">
+              <rect x="18" y="199" width="364" height="2" fill="url(#oc-g-fx)"/>
+              <rect x="199" y="70" width="2" height="260" fill="url(#oc-g-fy)"/>
+            </g>
+          </svg>
+              <div class="core-nodes" id="orb-nodes"></div>
+            </div>
+            <span class="stage-tag stage-tag-tl">OPTIC.01</span>
+            <span class="stage-tag stage-tag-br">IRIS / LIVE</span>
+          </div>
+
+          <div class="hero-copy">
+            <p class="micro gold-line" id="orb-kicker">NETWORK</p>
+            <h2 class="display">ATHENA</h2>
+            <p class="hero-tag">A goddess wired into your machines.</p>
+            <div class="hero-stats">
+              <div class="stat"><strong id="orb-count">0</strong><span class="micro dim" id="orb-label">MACHINES</span></div>
+              <div class="stat"><strong id="orb-online">0</strong><span class="micro dim">ANSWERING</span></div>
+              <div class="stat"><strong id="orb-vram">0</strong><span class="micro dim">GB VRAM</span></div>
+            </div>
+            <div class="orb-caption">
+              <span class="dot" id="net-dot"></span>
+              <span class="micro" id="net-caption">THE PANTHEON IS QUIET</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ticker" aria-hidden="true">
+          <div class="ticker-track">
+            <span>SELF-HEALING MESH</span><i>◆</i><span>ZERO CLOUD</span><i>◆</i><span>ONE JOB PER MACHINE</span><i>◆</i><span>SCREEN · INPUT · SOUND</span><i>◆</i><span>LOCAL ONLY</span><i>◆</i>
+            <span>SELF-HEALING MESH</span><i>◆</i><span>ZERO CLOUD</span><i>◆</i><span>ONE JOB PER MACHINE</span><i>◆</i><span>SCREEN · INPUT · SOUND</span><i>◆</i><span>LOCAL ONLY</span><i>◆</i>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat" id="chat">
+        <div class="msg athena">
+          <span class="micro dim">ATHENA</span>
+          <p id="greeting">Online. Ask me to run something anywhere on the network.</p>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="quick" id="quick">
+          <button data-quick="status">STATUS</button>
+          <button data-quick="what is running">RUNNING</button>
+          <button data-quick="install brain">INSTALL BRAIN</button>
+          <button data-quick="upgrade brain">UPGRADE BRAIN</button>
+        </div>
+        <form id="ask-form" class="ask">
+          <button type="button" class="mic" id="mic" aria-label="Speak to Athena"><span></span></button>
+          <input id="ask" placeholder="Tell Athena what to do…" autocomplete="off" spellcheck="false" />
+          <button type="submit" class="send" aria-label="Send">↗</button>
+        </form>
+        <p class="micro dim hint" id="brain-line">BRAIN · CHECKING</p>
+      </div>
+    </section>
+
+    <!-- SCREEN -->
+    <section class="view" data-view="screen" hidden>
+      <div class="view-head">
+        <div>
+          <p class="micro gold-line">THE WINDOWS</p>
+          <h2>Screen</h2>
+          <p class="micro dim">every machine at once · focus one to work it</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn" id="screen-mute">MUTE ALL</button>
+          <button class="btn" id="screen-redraw">REDRAW</button>
+        </div>
+      </div>
+      <div class="screen-deck">
+        <span class="micro dim">CONTROL PANEL</span>
+        <div class="deck-bar" id="screen-deck"></div>
+      </div>
+      <div id="screen-grid" class="screens"></div>
+    </section>
+
+    <!-- NODES -->
+    <section class="view" data-view="nodes" hidden>
+      <div class="view-head">
+        <div>
+          <p class="micro gold-line">THE PANTHEON</p>
+          <h2>Machines</h2>
+          <p class="micro dim">every linked machine is a pair of hands</p>
+        </div>
+        <button class="btn" id="scan">SCAN</button>
+      </div>
+      <div id="found"></div>
+      <div id="node-list" class="cards"></div>
+      <details class="panel">
+        <summary class="micro">LINK BY ADDRESS</summary>
+        <div class="grid2">
+          <label class="field"><span class="micro dim">HOST</span><input id="pair-host" placeholder="192.168.1.7" /></label>
+          <label class="field"><span class="micro dim">PORT</span><input id="pair-port" value="47910" inputmode="numeric" /></label>
+        </div>
+        <label class="field"><span class="micro dim">PAIRING CODE (ON THAT PC)</span><input id="pair-code" maxlength="10" placeholder="ABC123" /></label>
+        <button class="btn solid" id="pair">PAIR MACHINE</button>
+      </details>
+    </section>
+
+    <!-- JOBS -->
+    <section class="view" data-view="jobs" hidden>
+      <div class="view-head">
+        <div>
+          <p class="micro gold-line">THE ORACLE</p>
+          <h2>Executor</h2>
+          <p class="micro dim">queue · one job per machine at a time</p>
+        </div>
+        <button class="btn" id="jobs-refresh">REFRESH</button>
+      </div>
+      <div id="job-list" class="cards"></div>
+    </section>
+
+    <!-- APPS -->
+    <section class="view" data-view="apps" hidden>
+      <div class="view-head">
+        <div>
+          <p class="micro gold-line">THE ARSENAL</p>
+          <h2>Apps</h2>
+          <p class="micro dim">install once on a machine · then it can do more</p>
+        </div>
+        <button class="btn" id="apps-refresh">RESCAN</button>
+      </div>
+      <p class="micro dim">APPS LIVE ON THE NODES, NOT ON THE HUB. INSTALL ONE ON A MACHINE AND IT CAN DO MORE.</p>
+      <div id="app-list" class="apps"></div>
+    </section>
+
+    <!-- SYSTEM -->
+    <section class="view" data-view="system" hidden>
+      <div class="view-head">
+        <div>
+          <p class="micro gold-line">THE TEMPLE</p>
+          <h2>System</h2>
+          <p class="micro dim">hub · brain · look · keys</p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <p class="micro gold-line">THIS HUB</p>
+        <div class="kv"><span class="micro dim">ADDRESS</span><b id="sys-addresses">—</b></div>
+        <div class="kv"><span class="micro dim">ACCESS CODE</span><b class="accent" id="sys-code">—</b></div>
+        <div class="kv"><span class="micro dim">PROCESS</span><b id="sys-pid">—</b></div>
+        <div class="kv"><span class="micro dim">UPTIME</span><b id="sys-uptime">—</b></div>
+        <p class="micro dim">THE HUB IS THE ATHENA WINDOW ON THIS PC. CLOSING THAT WINDOW — OR SHUT DOWN HERE — STOPS IT. THE CODE IS ALSO IN athena\data\access-code.txt.</p>
+        <div class="actions">
+          <button class="btn tiny" id="hub-restart">RESTART HUB</button>
+          <button class="btn tiny danger" id="hub-stop">SHUT DOWN HUB</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <p class="micro gold-line">THE MIND</p>
+        <p class="micro dim" id="brain-detail">checking…</p>
+        <div class="actions">
+          <button class="btn tiny solid" id="brain-install">INSTALL BRAIN</button>
+          <button class="btn tiny" id="brain-upgrade">UPGRADE BRAIN</button>
+        </div>
+        <label class="check"><input type="checkbox" id="brain-vision" /><span class="micro">ALSO INSTALL A VISION MODEL — LETS ATHENA READ SCREENS</span></label>
+        <p class="micro dim" id="brain-state"></p>
+        <pre class="code" id="brain-log" hidden></pre>
+        <details open>
+          <summary class="micro dim">SWITCH BRAIN</summary>
+          <label class="field"><span class="micro dim">INSTALLED MODELS ON THIS HUB</span>
+            <select id="cfg-model-pick" disabled><option value="">checking…</option></select>
+          </label>
+          <label class="field"><span class="micro dim">PROVIDER</span>
+            <select id="cfg-provider">
+              <option value="auto">AUTO (local Ollama, else API)</option>
+              <option value="ollama">OLLAMA (local, free)</option>
+              <option value="openai">OPENAI-COMPATIBLE (key)</option>
+              <option value="gemini">GEMINI (key)</option>
+              <option value="off">OFF (built-in commands)</option>
+            </select>
+          </label>
+          <label class="field"><span class="micro dim">MODEL</span><input id="cfg-model" placeholder="qwen2.5:7b / gpt-4o-mini / gemini-2.0-flash" /></label>
+          <label class="field"><span class="micro dim">BASE URL (OPTIONAL)</span><input id="cfg-base" placeholder="https://api.openai.com/v1" /></label>
+          <label class="field"><span class="micro dim">API KEY (STORED ON THIS HUB ONLY)</span><input id="cfg-key" type="password" placeholder="sk-…" autocomplete="off" /></label>
+          <button class="btn tiny solid" id="cfg-save">SAVE</button>
+        </details>
+      </div>
+
+      <div class="panel">
+        <p class="micro gold-line">LOOK &amp; FEEL</p>
+        <p class="micro dim">TUNE THE SIGNAL · SAVED ON THIS DEVICE</p>
+        <div class="swatches" id="swatches">
+          <button data-accent="gold" class="on"><i style="--s:#d8a94e"></i>GOLD</button>
+          <button data-accent="ion"><i style="--s:#7f9dff"></i>ION BLUE</button>
+          <button data-accent="halo"><i style="--s:#58e2e6"></i>HALO CYAN</button>
+          <button data-accent="ember"><i style="--s:#ff7a52"></i>EMBER</button>
+          <button data-accent="jade"><i style="--s:#5fdca4"></i>JADE</button>
+        </div>
+        <label class="field"><span class="micro dim">MOTION</span>
+          <input type="range" id="cfg-motion" min="0" max="2" step="1" value="2" />
+        </label>
+        <label class="check"><input type="checkbox" id="cfg-glass" checked /><span class="micro">GLASS BLUR — TURN OFF ON A SLOW DEVICE</span></label>
+        <label class="check"><input type="checkbox" id="cfg-art" checked /><span class="micro">AMBIENT FIELD — STARS, NEBULA, DRIFT</span></label>
+        <p class="micro dim" id="motion-note">MOTION: DIVINE</p>
+      </div>
+
+      <div class="panel">
+        <p class="micro gold-line">MACHINES RUNNING</p>
+        <div id="sys-nodes"></div>
+      </div>
+
+      <div class="panel">
+        <p class="micro gold-line">HUB SETTINGS</p>
+        <label class="field"><span class="micro dim">NAME</span><input id="cfg-name" /></label>
+        <label class="field"><span class="micro dim">ACCESS CODE</span><input id="cfg-code" maxlength="12" /></label>
+        <label class="check"><input type="checkbox" id="cfg-open" /><span class="micro">OPEN MODE — no code on the local network</span></label>
+        <button class="btn tiny" id="cfg-save-2">SAVE</button>
+        <div class="kv" style="margin-top:14px"><span class="micro dim">DEVICES SIGNED IN</span><b id="sys-sessions">—</b></div>
+        <p class="micro dim" id="sessions-note">A device stays unlocked for 30 days after its last use.</p>
+        <button class="btn tiny danger" id="sessions-clear">SIGN OUT EVERY DEVICE</button>
+      </div>
+
+      <div class="panel">
+        <p class="micro gold-line">API KEYS</p>
+        <p class="micro dim">LET ANY TOOL USE YOUR MACHINES</p>
+        <label class="field"><span class="micro dim">LABEL</span><input id="key-label" placeholder="comfyui-remote / my bot / render script" /></label>
+        <button class="btn tiny solid" id="key-create">CREATE KEY</button>
+        <div id="new-key"></div>
+      </div>
+      <div id="key-list" class="cards"></div>
+      <div class="panel">
+        <p class="micro dim">EXAMPLE</p>
+        <pre class="code" id="api-example">curl -H "x-athena-key: ath_…" http://HUB:4790/v1/health</pre>
+      </div>
+
+      <div class="panel">
+        <p class="micro gold-line">NETWORK</p>
+        <p class="micro dim" id="net-detail"></p>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabs" id="tabs">
+    <span class="tab-glide" aria-hidden="true"></span>
+    <button data-tab="home" class="active"><i>◈</i><span>HOME</span></button>
+    <button data-tab="screen"><i>▣</i><span>SCREEN</span></button>
+    <button data-tab="nodes"><i>⬡</i><span>NODES</span></button>
+    <button data-tab="apps"><i>▦</i><span>APPS</span></button>
+    <button data-tab="jobs"><i>≣</i><span>JOBS</span></button>
+    <button data-tab="system"><i>⚙</i><span>SYSTEM</span></button>
+  </nav>
+</div>
+
+<!-- ─────────────────────────────────────────  FOCUS -->
+<div class="focus" id="focus" hidden>
+  <div class="focus-veil" data-close></div>
+  <div class="focus-shell">
+    <header class="focus-head">
+      <div class="focus-title">
+        <p class="micro gold-line">FOCUSED SIGNAL</p>
+        <h2 id="focus-name">—</h2>
+        <p class="micro dim" id="focus-meta"></p>
+      </div>
+      <div class="head-actions">
+        <span class="badge" id="focus-badge">—</span>
+        <button class="btn tiny" id="focus-listen">LISTEN</button>
+        <button class="btn tiny" id="focus-mute">MUTE</button>
+        <button class="btn tiny" data-close>CLOSE ✕</button>
+      </div>
+    </header>
+    <div class="focus-body">
+      <div class="focus-stage">
+        <img id="focus-img" alt="Focused screen" draggable="false" />
+        <div class="screen-note" id="focus-note">CONNECTING…</div>
+        <span class="scanline" aria-hidden="true"></span>
+        <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      </div>
+      <aside class="focus-rail">
+        <div class="rail-block">
+          <p class="micro gold-line">KEYS</p>
+          <div class="focus-keys">
+            <button class="btn tiny" data-k="enter">⏎ ENTER</button>
+            <button class="btn tiny" data-k="tab">TAB</button>
+            <button class="btn tiny" data-k="esc">ESC</button>
+            <button class="btn tiny" data-k="backspace">⌫ DEL</button>
+            <button class="btn tiny" data-k="space">SPACE</button>
+            <button class="btn tiny" data-k="win">WIN</button>
+            <button class="btn tiny" data-k="up">↑</button>
+            <button class="btn tiny" data-k="down">↓</button>
+            <button class="btn tiny" data-k="left">←</button>
+            <button class="btn tiny" data-k="right">→</button>
+            <button class="btn tiny" data-k="alt+tab">ALT+TAB</button>
+            <button class="btn tiny" data-k="ctrl+w">CTRL+W</button>
+            <button class="btn tiny" data-k="f11">F11</button>
+            <button class="btn tiny" data-k="printscreen">PRTSC</button>
+          </div>
+        </div>
+        <div class="rail-block">
+          <p class="micro gold-line">SCROLL</p>
+          <div class="focus-keys">
+            <button class="btn tiny" data-scroll="5">▲ FAST</button>
+            <button class="btn tiny" data-scroll="2">▲</button>
+            <button class="btn tiny" data-scroll="-2">▼</button>
+            <button class="btn tiny" data-scroll="-5">▼ FAST</button>
+          </div>
+        </div>
+        <div class="rail-block">
+          <p class="micro gold-line">TYPE ON THAT PC</p>
+          <form class="focus-type" id="focus-form">
+            <input id="focus-text" placeholder="Type here, press SEND…" autocomplete="off" spellcheck="false" />
+            <button class="btn tiny solid" type="submit">SEND</button>
+          </form>
+        </div>
+        <div class="rail-block" id="focus-stats-block">
+          <p class="micro gold-line">THAT MACHINE</p>
+          <div id="focus-stats"></div>
+        </div>
+        <div class="rail-block">
+          <p class="micro gold-line">SHORTCUTS</p>
+          <div class="focus-keys">
+            <button class="btn tiny" data-quick-focus="open task manager">TASK MANAGER</button>
+            <button class="btn tiny" data-quick-focus="what windows are open">WINDOWS</button>
+            <button class="btn tiny" data-quick-focus="describe this screen">READ SCREEN</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/app.js?v=11" type="module"></script>
+</body>
+</html>

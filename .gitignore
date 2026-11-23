@@ -1,0 +1,26 @@
+# ── runtime state and secrets ───────────────────────────────────────────────
+# data/ holds the access code, the API-key hashes, every paired node token and
+# the sessions of unlocked phones. Never commit it.
+data/
+
+# a node's own identity and pairing token + its settings
+node/config.json
+node/state.json
+node/screen-frame.jpg
+
+# logs, dumps, leftovers
+*.log
+*.out
+*.err
+node/*.log
+node/*.out
+node/*.err
+
+# ── local / editor noise ────────────────────────────────────────────────────
+node_modules/
+.env
+.env.*
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
