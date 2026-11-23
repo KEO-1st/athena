@@ -1,6 +1,6 @@
 /* ATHENA app shell — cache the chrome, never the API, never the HTML. */
-const VERSION = "athena-v16";
-const SHELL = ["/styles.css?v=11", "/app.js?v=11", "/manifest.webmanifest", "/icons/icon-192.png"];
+const VERSION = "athena-v17";
+const SHELL = ["/styles.css?v=12", "/app.js?v=12", "/manifest.webmanifest", "/icons/icon-192.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(VERSION).then((cache) => cache.addAll(SHELL)).catch(() => undefined));

@@ -5,7 +5,8 @@ const $$ = (sel) => [...document.querySelectorAll(sel)];
 
 const store = {
   token: localStorage.getItem("athena.session") || "",
-  speak: localStorage.getItem("athena.speak") === "1",
+  /* Athena answers out loud by default — it is a voice-first app. */
+  speak: localStorage.getItem("athena.speak") === null ? true : localStorage.getItem("athena.speak") === "1",
   mode: localStorage.getItem("athena.mode") === "advanced" ? "advanced" : "basic",
   look: {
     accent: localStorage.getItem("athena.accent") || "gold",
@@ -432,50 +433,114 @@ function thinking() {
 }
 
 let voicePrimed = false;
+const speechReady = () => "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
 
 /**
- * iOS only allows speech that starts inside a tap. The reply arrives long
- * after the tap, so the engine is woken once on the first touch and again
- * before each sentence — otherwise Safari accepts speak() and stays silent.
+ * iOS only allows speech whose engine was woken by a real tap. One silent
+ * utterance during the first touch unlocks it for the rest of the session.
+ * It is deliberately not cancelled — cancelling revokes the unlock in Safari.
  */
 function primeVoice() {
-  if (voicePrimed || !("speechSynthesis" in window)) return;
+  if (voicePrimed || !speechReady()) return;
   voicePrimed = true;
   try {
-    const silent = new SpeechSynthesisUtterance(" ");
+    const silent = new SpeechSynthesisUtterance("");
     silent.volume = 0;
+    silent.rate = 1;
+    speechSynthesis.resume();
     speechSynthesis.speak(silent);
-    speechSynthesis.cancel();
   } catch {
-    /* no voices yet */
+    voicePrimed = false;
+  }
+}
+
+let spokenChunks = [];
+let speakTimer = 0;
+let speakGen = 0;
+
+/** Splits a reply into mouth-sized pieces; Safari goes silent on long blocks. */
+function speechChunks(text) {
+  const clean = String(text)
+    .replace(/```[\s\S]*?```/g, " code block ")
+    .replace(/[*_#`>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean) return [];
+  const sentences = clean.match(/[^.!?…]+[.!?…]*/g) || [clean];
+  const chunks = [];
+  let current = "";
+  for (const sentence of sentences) {
+    const piece = sentence.trim();
+    if (!piece) continue;
+    if ((current + " " + piece).trim().length > 180) {
+      if (current) chunks.push(current.trim());
+      current = piece.length > 180 ? piece.slice(0, 180) : piece;
+    } else {
+      current = (current + " " + piece).trim();
+    }
+  }
+  if (current) chunks.push(current.trim());
+  return chunks.slice(0, 12);
+}
+
+function speakNext(gen) {
+  if (gen !== speakGen) return;
+  window.clearInterval(speakTimer);
+  speakTimer = 0;
+  if (!spokenChunks.length) return;
+  const utterance = new SpeechSynthesisUtterance(spokenChunks.shift());
+  utterance.rate = 1.02;
+  utterance.pitch = 0.92;
+  utterance.volume = 1;
+  const voices = speechSynthesis.getVoices();
+  const english = voices.filter((voice) => /^en[-_]/i.test(voice.lang));
+  const preferred =
+    english.find((voice) => /samantha|serena|aria|zira|female/i.test(voice.name)) ||
+    english[0] ||
+    null;
+  if (preferred) utterance.voice = preferred;
+  utterance.onend = () => speakNext(gen);
+  utterance.onerror = () => speakNext(gen);
+  try {
+    speechSynthesis.resume();
+    speechSynthesis.speak(utterance);
+  } catch {
+    /* the browser refused — stay quiet */
   }
 }
 
 function speak(text) {
-  if (!store.speak || !("speechSynthesis" in window)) return;
-  const clean = String(text).replace(/```[\s\S]*?```/g, " code block ").replace(/[*_#`>]/g, "").slice(0, 600);
-  if (!clean.trim()) return;
+  if (!store.speak || !speechReady()) return;
+  const chunks = speechChunks(text);
+  if (!chunks.length) return;
   primeVoice();
-  const say = () => {
-    try {
-      const utterance = new SpeechSynthesisUtterance(clean);
-      utterance.rate = 1.02;
-      utterance.pitch = 0.92;
-      const voices = speechSynthesis.getVoices();
-      const preferred = voices.find((voice) => /en[-_]/i.test(voice.lang) && /female|samantha|serena|zira|aria/i.test(voice.name));
-      if (preferred) utterance.voice = preferred;
-      speechSynthesis.resume();
-      speechSynthesis.speak(utterance);
-    } catch {
-      /* the browser refused — nothing to do but stay quiet */
-    }
-  };
+  /* Cancelling fires onerror on whatever was playing — the generation stamp
+     makes sure that stale callback cannot restart the old reply. */
+  const gen = ++speakGen;
   try {
     speechSynthesis.cancel();
   } catch {
     /* nothing queued */
   }
-  setTimeout(say, 80);
+  spokenChunks = chunks;
+  /* Chrome and iOS both need the queue drained from a task, not mid-gesture. */
+  window.setTimeout(() => {
+    if (gen !== speakGen || !spokenChunks.length) return;
+    speakNext(gen);
+    /* A speech engine that falls asleep mid-reply needs a nudge. */
+    window.clearInterval(speakTimer);
+    speakTimer = window.setInterval(() => {
+      if (gen !== speakGen) {
+        window.clearInterval(speakTimer);
+        speakTimer = 0;
+      } else if (speechSynthesis.speaking || speechSynthesis.pending) {
+        speechSynthesis.resume();
+      } else if (!spokenChunks.length) {
+        window.clearInterval(speakTimer);
+        speakTimer = 0;
+      }
+    }, 5000);
+  }, 90);
 }
 
 async function submitAsk(text) {
@@ -510,6 +575,13 @@ let recognition = null;
 let listening = false;
 
 function startListening() {
+  /* Speaking to Athena means you expect her to answer out loud. */
+  if (!store.speak) {
+    store.speak = true;
+    localStorage.setItem("athena.speak", "1");
+    render();
+  }
+  primeVoice();
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!Recognition) {
     toast("Voice input is not available in this browser. Type instead.");
@@ -1294,7 +1366,13 @@ $("#mic").addEventListener("click", () => {
 $("#speak-toggle").onclick = () => {
   store.speak = !store.speak;
   localStorage.setItem("athena.speak", store.speak ? "1" : "0");
-  if (!store.speak) speechSynthesis?.cancel();
+  if (store.speak) {
+    primeVoice();
+    speak("Voice on.");
+  } else if (speechReady()) {
+    spokenChunks = [];
+    speechSynthesis.cancel();
+  }
   render();
 };
 

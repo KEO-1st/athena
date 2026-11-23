@@ -36,7 +36,7 @@ const SESSIONS_FILE = path.join(DATA, "sessions.json");
 const NODES_FILE = path.join(DATA, "nodes.json");
 const JOBS_FILE = path.join(DATA, "jobs.json");
 const CODE_FILE = path.join(DATA, "access-code.txt");
-const VERSION = "2.2.0";
+const VERSION = "2.2.1";
 const STARTED_AT = nowIso();
 /* A phone stays unlocked for a month, then asks for the code again. */
 const SESSION_DAYS = 30;
