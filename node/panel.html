@@ -256,12 +256,13 @@
     const tasks = (s.tasks || []).filter((task) => task.state === "running").length;
     $("running").textContent = tasks ? tasks + " TASK" + (tasks === 1 ? "" : "S") : "IDLE";
 
-    const services = Object.entries(s.services || {});
+    /* Only services that exist here — an uninstalled app is noise on the wall */
+    const services = Object.entries(s.services || {}).filter(([, service]) => service && (service.ok || service.installed || service.dir));
     $("services").innerHTML = services.length
       ? services
           .map(([id, service]) => {
             const label = id.charAt(0).toUpperCase() + id.slice(1);
-            const state = service?.ok ? "UP" : service?.installed || service?.dir ? "INSTALLED · STOPPED" : "NOT INSTALLED";
+            const state = service?.ok ? "UP" : "INSTALLED · STOPPED";
             const port = service?.port ? " · PORT " + service.port : "";
             return `<div class="app-line">
               <span>${esc(label)}</span>
@@ -269,7 +270,7 @@
             </div>`;
           })
           .join("")
-      : `<p class="hint">No services report from this machine yet.</p>`;
+      : `<p class="hint">No apps or services installed here yet — see APPS on the hub.</p>`;
     $("log").textContent = (s.log || "").split("\n").slice(-3).join("\n");
   }
 
