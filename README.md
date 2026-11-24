@@ -50,8 +50,8 @@ Closing it stops ATHENA for everyone. If you close it, start it again.
 
 ## 2 · Turn the other PC into a node
 
-Copy the **`athena/node/`** folder to the render PC (USB, network share, or this
-same OneDrive folder if both PCs sync it), then:
+Copy the **whole `dist/ATHENA-Node-0.1.0`** folder to the render PC (build it
+with `npm run package:node`), then:
 
 1. Double-click **Install Node.cmd** (installs Node if needed, starts the node).
 2. Allow the Windows Firewall prompt for **Private networks**.
@@ -65,7 +65,10 @@ owns it.
 If discovery is blocked, use **LINK BY ADDRESS** (`192.168.x.x`, port `47910`)
 with the same code.
 
-After the first time, **Start Node.cmd** is all you need.
+After the first time, **Start Node.cmd** is all you need. The Node's id,
+pairing token and settings live in `%LOCALAPPDATA%\ATHENA Node`, so replacing
+the program folder with a newer Node package keeps the machine paired. There is
+no automatic Node update; upgrading is a deliberate choice.
 
 ---
 
@@ -172,11 +175,13 @@ plain language:
 
 ---
 
-## 4b · Apps on a machine
+## 4b · Software on a machine
 
-**APPS** is what a node can be *given*. ATHENA is a network, not a ComfyUI
-front-end: ComfyUI is one card here, next to the rest, and it is only the
-star of the show on a machine that actually renders.
+There is no global Apps/Software tab. Open **NODES**, find the machine, and
+expand **SOFTWARE ON THIS MACHINE**. That section reads, installs and starts
+software on that PC only. ATHENA is a network, not a ComfyUI front-end:
+ComfyUI is one card there, next to the rest, and it is only the star of the
+show on a machine that actually renders.
 
 | App | What it adds | Service |
 | --- | --- | --- |
@@ -188,7 +193,7 @@ star of the show on a machine that actually renders.
 | **yt-dlp** | reference clips and audio | tool |
 | **7-Zip** | unpack models and portable builds | tool |
 
-Each app card shows one row per machine — INSTALLED / RUNNING / MISSING — with
+Each app row shows INSTALLED / RUNNING / MISSING for that machine, with
 INSTALL, START and STOP right there. Installs are winget (`Ollama.Ollama`,
 `Gyan.FFmpeg`, …) and can take a few minutes; the card shows WORKING until the
 node answers. After installing a command-line app, restart the node agent so

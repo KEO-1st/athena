@@ -161,17 +161,26 @@ test("/api/ask answers a version question from real state, with timing", async (
   assert.ok(res.json.meta.ms < 1000);
 });
 
-test("the app shell exposes Software and Integrations wiring", async () => {
+test("software is per machine and Integrations live in System", async () => {
   const page = await request(hub.port, "/");
   assert.equal(page.status, 200);
-  assert.match(page.text, /<h2>Software<\/h2>/);
+  assert.doesNotMatch(page.text, /data-tab="apps"/, "there is no global Software tab");
+  assert.doesNotMatch(page.text, /data-view="apps"/, "there is no global Software view");
+  assert.doesNotMatch(page.text, /<h2>Software<\/h2>/);
   assert.match(page.text, /id="integration-list"/);
   assert.match(page.text, /id="int-add"/);
-  assert.doesNotMatch(page.text, /<h2>Apps<\/h2>/);
+  assert.match(page.text, /id="voice-pick"/, "the voice controls are in System");
+  assert.match(page.text, /SPOKEN VOICE/);
 
   const js = await request(hub.port, "/app.js");
   assert.equal(js.status, 200);
+  assert.match(js.text, /function loadNodeSoftware/);
+  assert.match(js.text, /function renderNodeSoftware/);
   assert.match(js.text, /function renderIntegrations/);
   assert.match(js.text, /function addShots/);
-  assert.match(js.text, /noteScreenFrame/);
+  assert.doesNotMatch(js.text, /store\.mode|data-mode|loadApps/);
+  const speech = await request(hub.port, "/speech.mjs");
+  assert.equal(speech.status, 200);
+  assert.match(speech.headers["content-type"], /text\/javascript/, "browsers refuse a module with the wrong MIME type");
+  assert.match((await request(hub.port, "/app.js")).headers["content-type"], /text\/javascript/);
 });

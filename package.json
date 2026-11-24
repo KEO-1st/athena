@@ -1,6 +1,6 @@
 {
   "name": "athena",
-  "version": "2.4.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "description": "ATHENA — a personal AI that coordinates the machines on your network.",
@@ -12,6 +12,9 @@
     "node": "node node/athena-node.mjs",
     "check": "node tests/check.mjs",
     "test": "node --test tests",
-    "smoke": "node tests/smoke.mjs"
+    "smoke": "node tests/smoke.mjs",
+    "package:node": "node tools/package.mjs --only node",
+    "package:hub": "node tools/package.mjs --only hub",
+    "package": "node tools/package.mjs"
   }
 }

@@ -423,42 +423,7 @@ main > section + section { margin-top: 26px; }
 .top-slash { width: 26px; height: 1px; background: var(--hair-2); transform: rotate(-24deg); }
 .top-signal { display: inline-flex; align-items: center; gap: 7px; letter-spacing: 0.24em; color: var(--dim); }
 
-.mode {
-  position: relative;
-  display: flex;
-  padding: 2px;
-  border: 1px solid var(--hair);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.025);
-  flex: 0 0 auto;
-}
-.mode button {
-  position: relative;
-  z-index: 1;
-  padding: 7px 10px;
-  border: 0;
-  border-radius: 999px;
-  background: none;
-  color: var(--dim);
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.16em;
-  cursor: pointer;
-  transition: color 0.3s;
-}
-.mode button.on { color: #08090e; }
-.mode-glide {
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  left: 2px;
-  width: calc(50% - 2px);
-  border-radius: 999px;
-  background: linear-gradient(180deg, var(--accent-l), var(--accent));
-  box-shadow: 0 0 18px -4px var(--glow);
-  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-body[data-mode="advanced"] .mode-glide { transform: translateX(100%); }
+
 
 /* ═══════════════════════════════════════════════════════ CORE
    the eye inside the star — rings, iris, sweep, flare */
@@ -1499,6 +1464,31 @@ details[open] > summary::before { content: "[ \2212 ]  "; }
 .app-row { display: flex; flex-direction: column; gap: 5px; padding: 8px; border: 1px solid var(--hair-3); background: rgba(0, 0, 0, 0.25); }
 .app-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .app-row-head .micro { letter-spacing: 0.12em; color: var(--ink); }
+
+/* Software lives inside the machine card, not in a global tab. */
+.node-soft {
+  margin: 12px 0 6px;
+  padding: 0;
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.018);
+}
+.node-soft > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.node-soft > summary::-webkit-details-marker { display: none; }
+.node-soft > summary::before { content: "[ + ]  "; color: var(--accent); }
+.node-soft[open] > summary::before { content: "[ − ]  "; }
+.node-soft[open] > summary { border-bottom: 1px solid var(--hair-3); }
+.node-soft .soft-body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.node-soft .soft-body > p:last-child { margin-top: 4px; }
 .found-row { display: flex; gap: 6px; margin-top: 8px; }
 .found-row input { padding: 7px 9px; font-size: 11px; letter-spacing: 0.18em; }
 

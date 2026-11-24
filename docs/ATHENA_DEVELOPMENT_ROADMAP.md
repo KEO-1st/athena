@@ -599,3 +599,27 @@ containment release plus the test harness the rest of the roadmap depends on.
 **Still manual:** Windows screen/input, FFmpeg audio, ComfyUI live behaviour,
 iOS microphone over HTTPS, PWA update, and a real two-machine LAN session. See
 `docs/TESTING.md`.
+
+---
+
+## 16. ATHENA 3.0 delivery record (Node V0.1 and control-surface cleanup)
+
+**Hub 3.0.0 · Node 0.1.0 · protocol 1.** This sprint does not claim Phase 2
+(identity and authorization) or Phase 4 (outbound channel). It does deliver the
+release/versioning foundation the roadmap deferred, plus the user-facing fixes
+that were blocking daily use.
+
+| Item | Outcome | Evidence |
+| --- | --- | --- |
+| Basic / Advanced | Removed. It only changed whether tapping a screen preview navigated or sent a remote click, with no explanation. Previews now always navigate; clicks happen on the focused screen. | `public/app.js`, shell test |
+| Software tab | Removed as a global tab. Each machine card has its own lazy-loaded Software section; the Hub-level Integrations live in SYSTEM. | `public/index.html`, `loadNodeSoftware` |
+| Jobs | Investigated: both visible jobs are completed API smoke commands (`source: "api"`, exit 0, ~1 s), not system jobs or failures. New jobs record `createdBy` (API-key label or app session). The page explains what a job is, its origin, timing, exit code, output and actions. | `lib/jobs.mjs`, `server.mjs`, `renderJobs` |
+| Node V0.1 | Independent `node/version.json`; `/api/hello` negotiation; Hub range and 426 refusal; compatibility shown per machine; identity kept in `%LOCALAPPDATA%`; no auto-update. | `docs/ATHENA_NODE_V0_1.md` |
+| Windows packaging | `npm run package:node` and `package:hub`; real `ATHENA Hub.exe` launcher compiled with the built-in C# compiler and a bundled runtime; portable data folder. | `tools/package.mjs`, `tests/package.test.mjs` |
+| TTS | Browser-only speech was choosing voices by a female-name regex and lowering pitch to 0.92. Now selects by a quality ranking (Natural/Neural/Online first), neutral pitch, selectable voice, speed/pitch controls, and pronunciation rules for ATHENA, GPU, IPs, versions and percentages. | `public/speech.mjs`, SYSTEM → SPOKEN VOICE |
+| Response speed | Unchanged from 2.4.0: deterministic identity answers and conclusive-action short-circuit remain. | `lib/identity.mjs`, `lib/brain.mjs` |
+
+**Next milestone:** Phase 2 — scoped API keys and per-action authorization,
+followed by Phase 4's outbound channel. Packaging is a zip/folder today; a
+signed installer and signed Node package belong with Phase 7 (updates and
+rollback), not before.

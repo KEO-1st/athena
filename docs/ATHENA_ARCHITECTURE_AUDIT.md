@@ -534,3 +534,74 @@ Per-phase acceptance criteria are listed in the roadmap document, each phrased a
 - ComfyUI, FFmpeg and winget behaviour is inferred from invocation code; version-specific flags may differ.
 - Browser DNS-rebinding feasibility depends on the browser and was not executed; the missing `Host`/`Origin` validation that enables it is confirmed in code.
 - No dependency audit was performed because there are no third-party runtime dependencies.
+
+---
+
+## 14. ATHENA 3.0 implementation notes (supersedes the 2.2 audit where stated)
+
+**Hub 3.0.0 · Node 0.1.0.** The audit above was written before Phases 0–1 and the
+2.4.0/3.0.0 work. These statements are current and were verified by tests.
+
+### 14.1 Control surface
+
+- The BASIC/ADV switch was decorative except for one hidden branch in the
+  screen grid: basic mode made a preview tap open Focus, advanced mode sent a
+  remote mouse click. Nothing told the user which mode did what, and a misclick
+  on a thumbnail could act on the remote PC. It has been removed. Previews
+  always navigate to Focus; remote clicks happen on the full-size focused image,
+  where the target is visible.
+- Software is no longer a global tab. Each machine card contains a lazy-loaded
+  Software section that queries that node only. The Hub-level Integrations
+  registry moved to SYSTEM. `/api/apps` is still the catalogue endpoint.
+
+### 14.2 Jobs
+
+The two jobs visible in `data/jobs.json` were created on 2026-11-23 at 01:59 and
+02:00 UTC by `POST` requests to a node `/exec` endpoint (the same handler serves
+`/api` and `/v1`), with commands `echo athena-ok` and `echo keyed-ok`. Both
+completed with exit code 0 in about one second and were the API smoke checks
+recorded in the Phase 1 delivery. They are not system jobs, not scheduled work,
+and not failures. They were left untouched.
+
+New jobs now record `source` (`api` or `hub`) and `createdBy` (the API key's
+label, or the app session). The Jobs page states what a job is, that the AI
+answers in chat without queueing jobs, and each card shows why it exists, its
+timeline, exit code, failure reason and output. Cancel is offered only while a
+job is queued or running.
+
+### 14.3 Node / Hub boundary
+
+The Node previously imported the Hub's `lib/version.mjs`, so a Hub upgrade
+changed the Node's reported version. Node software is now versioned by
+`node/version.json` and negotiated by protocol (`docs/ATHENA_NODE_V0_1.md`).
+Pairing fetches `/api/hello` first and refuses an out-of-range protocol; every
+Hub request carries `x-athena-hub-protocol`, and a Node answers 426 rather than
+half-executing. Legacy Nodes remain usable and are labelled. Nothing upgrades a
+Node automatically.
+
+### 14.4 Speech
+
+TTS is browser-generated (`window.speechSynthesis`) on the viewing device; the
+Hub never synthesises audio. The old code picked the first English voice whose
+name matched `samantha|serena|aria|zira|female`, then applied `pitch = 0.92` and
+`rate = 1.02`. On Windows that usually lands on a legacy SAPI voice and the
+lowered pitch reinforces the robotic impression. The replacement:
+
+- ranks installed voices by Natural / Neural / Enhanced / Online names, with
+  legacy desktop voices last;
+- defaults pitch to 1.0 and rate to 1.0, with per-device controls;
+- stores the chosen voice name and settings in `localStorage` (per device);
+- normalises ATHENA, GPU/CPU/VRAM/API, IP addresses, versions, percentages and
+  arrows before speaking;
+- splits on word boundaries, because Safari truncates long utterances.
+
+Quality is bounded by the voices installed in Windows/iOS. A local neural engine
+(Piper/Kokoro) is a later Phase 9 option, not a speed tweak.
+
+### 14.5 Distribution
+
+`tools/package.mjs` assembles a standalone Node folder/zip and a Hub folder/zip
+containing `ATHENA Hub.exe`, a bundled `runtime/node.exe`, the server, `lib/` and
+`public/`. The launcher is a small C# program compiled by the compiler included
+with Windows; it performs no installation. The data directory stays beside the
+executable, so the hub folder must live somewhere writable.

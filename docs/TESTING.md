@@ -4,9 +4,11 @@ ATHENA has **no runtime dependencies** and no build step. The test suite uses
 Node's built-in test runner, so a clean checkout plus Node 20+ is enough.
 
 ```bash
-npm run check    # parse every .js/.mjs file with Node itself
-npm test         # unit + integration tests (starts real hub/node on temp dirs)
-npm run smoke    # one full hub boot: health, shell, service worker, auth wall
+npm run check        # parse every .js/.mjs file with Node itself
+npm test             # unit + integration tests (starts real hub/node on temp dirs)
+npm run smoke        # one full hub boot: health, shell, service worker, auth wall
+npm run package:node # standalone Node V0.1 folder + zip
+npm run package:hub  # Hub folder + ATHENA Hub.exe + zip
 ```
 
 All three must pass before a change is committed. There is no CI configuration
@@ -23,6 +25,10 @@ yet; run them locally.
 | `tests/hub.test.mjs` | Auth wall, access-code-as-credential rejection, token-in-URL rejection, state contains no code/data dir, Host/Origin policy, CORS, body limits, settings re-confirmation, local intent header, stream tickets, service-worker version substitution. |
 | `tests/node.test.mjs` | Node boots in a temp identity directory, loopback alone is insufficient, status requires a credential, log tail is redacted, a hub cannot widen node permissions, Host/body policy. |
 | `tests/smoke.mjs` | Boots the real hub, checks health/version, index, `sw.js`, 401/200 on `/api/state`. |
+| `tests/node-protocol.test.mjs` | Node has its own version; protocol ranges; legacy Nodes; pairing negotiation stores the Node version and refuses a future protocol. |
+| `tests/package.test.mjs` | Node package layout, identity outside program files, no auto-updater wording, Hub `ATHENA Hub.exe` compilation and shell. |
+| `tests/speech.test.mjs` | Pronunciation normalisation, word-boundary chunking, voice ranking (Natural first, legacy last). |
+| `tests/hub.test.mjs` (shell) | No global Software tab, per-node software functions, Integrations and voice controls in SYSTEM. |
 
 ### How isolation works
 
@@ -60,6 +66,21 @@ These depend on the host or a browser and are not automated:
 7. **LAN access** — the hub answers only to its own hostnames and IPs. If the
    network uses an alias (for example `athena.home.arpa`), set
    `ATHENA_ALLOWED_HOSTS=athena.home.arpa` on the hub.
+8. **Node install on a second PC** — copy `dist/ATHENA-Node-0.1.0`, run
+   `Install Node.cmd`, allow the private-network firewall prompt, pair from the
+   Hub, restart the PC, and confirm the same node id is reused from
+   `%LOCALAPPDATA%\ATHENA Node`.
+9. **Hub executable** — unzip `dist/ATHENA-Hub-3.0.0-win64.zip` to a writable
+   folder, double-click `ATHENA Hub.exe`, confirm the browser opens, the access
+   code is printed, and `data/` is created beside the exe. Check Defender's
+   response to a new unsigned executable.
+10. **Voice quality** — SYSTEM → SPOKEN VOICE lists the device's voices; choose a
+    Natural/Online voice, press TEST VOICE, and confirm speed/pitch survive a
+    reload. On Windows, compare with a legacy Desktop voice to hear the
+    difference.
+11. **Per-node software** — NODES → open SOFTWARE ON THIS MACHINE on node A,
+    confirm it lists only A's software; install/start an app and confirm the
+    other node is unaffected.
 
 ## Security checks worth repeating manually
 

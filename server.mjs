@@ -202,6 +202,7 @@ function authenticate(req) {
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
@@ -572,11 +573,14 @@ const server = http.createServer(async (req, res) => {
       if (rest === "/exec" && method === "POST") {
         const body = await readBody(req);
         if (!body.command) return json(res, 400, { error: "Give a command." });
+        const auth = authenticate(req);
         const job = jobs.create({
           node: node.id,
           op: "run",
-          args: { command: String(body.command), timeoutSec: clamp(body.timeoutSec || 900, 5, 7200), source: body.source || "api" },
+          args: { command: String(body.command), timeoutSec: clamp(body.timeoutSec || 900, 5, 7200) },
           label: String(body.command).split("\n")[0].slice(0, 120),
+          source: String(body.source || (route.startsWith("/v1/") ? "api" : "hub")),
+          createdBy: auth.key ? `API key “${auth.key.label}”` : auth.via === "session" ? "signed-in app session" : auth.via === "open" ? "open mode (no key)" : null,
         });
         if (body.wait === false) return json(res, 202, { ok: true, job });
         return json(res, 200, { ok: true, job: await waitFor(job.id, Number(body.waitSec) || 120) });
@@ -704,16 +708,26 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const node = registry.get(body.node);
       if (!node) return json(res, 400, { error: `No node called "${body.node}".` });
+      const auth = authenticate(req);
       if (body.op && body.op !== "run" && body.op !== "exec") {
-        const job = jobs.create({ node: node.id, op: String(body.op), args: body.args || {}, label: body.label });
+        const job = jobs.create({
+          node: node.id,
+          op: String(body.op),
+          args: body.args || {},
+          label: body.label,
+          source: "hub",
+          createdBy: auth.key ? `API key “${auth.key.label}”` : "this Hub's app",
+        });
         return json(res, 202, { ok: true, job });
       }
       if (!body.command) return json(res, 400, { error: "Give a command." });
       const job = jobs.create({
         node: node.id,
         op: "run",
-        args: { command: String(body.command), timeoutSec: clamp(body.timeoutSec || 900, 5, 7200), source: body.source || "api" },
+        args: { command: String(body.command), timeoutSec: clamp(body.timeoutSec || 900, 5, 7200) },
         label: body.label || String(body.command).split("\n")[0].slice(0, 120),
+        source: "hub",
+        createdBy: auth.key ? `API key “${auth.key.label}”` : "this Hub's app",
       });
       return json(res, 202, { ok: true, job });
     }

@@ -1,4 +1,5 @@
 /* ATHENA — hub client. Works on iOS Safari as an installed PWA. */
+import { rankVoices, speechChunks, voiceLabel } from "./speech.mjs";
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
@@ -7,7 +8,11 @@ const store = {
   token: localStorage.getItem("athena.session") || "",
   /* Athena answers out loud by default — it is a voice-first app. */
   speak: localStorage.getItem("athena.speak") === null ? true : localStorage.getItem("athena.speak") === "1",
-  mode: localStorage.getItem("athena.mode") === "advanced" ? "advanced" : "basic",
+  voice: {
+    name: localStorage.getItem("athena.voice") || "",
+    rate: Number(localStorage.getItem("athena.voiceRate")) || 1,
+    pitch: Number(localStorage.getItem("athena.voicePitch")) || 1,
+  },
   look: {
     accent: localStorage.getItem("athena.accent") || "gold",
     motion: localStorage.getItem("athena.motion") || "2",
@@ -52,12 +57,10 @@ const MOTION_LABELS = ["CALM", "DIVINE", "ECSTATIC"];
 
 function applyLook() {
   const body = document.body;
-  body.dataset.mode = store.mode;
   body.dataset.accent = store.look.accent;
   body.dataset.motion = store.look.motion;
   body.dataset.glass = store.look.glass ? "on" : "off";
   body.dataset.art = store.look.art ? "on" : "off";
-  $$("#mode button").forEach((button) => button.classList.toggle("on", button.dataset.mode === store.mode));
   $$("#swatches button").forEach((button) => button.classList.toggle("on", button.dataset.accent === store.look.accent));
   const motion = $("#cfg-motion");
   if (motion) motion.value = store.look.motion;
@@ -68,13 +71,6 @@ function applyLook() {
   const note = $("#motion-note");
   if (note) note.textContent = `MOTION: ${MOTION_LABELS[Number(store.look.motion)] || "DIVINE"} · ${"▮".repeat(Number(store.look.motion) + 1)}`;
   moveTabGlide();
-}
-
-function setMode(mode) {
-  store.mode = mode === "advanced" ? "advanced" : "basic";
-  localStorage.setItem("athena.mode", store.mode);
-  applyLook();
-  requestAnimationFrame(moveTabGlide);
 }
 
 /** The gold pill that slides under the active tab, in either bar orientation. */
@@ -259,16 +255,22 @@ function renderNodes(nodes, state) {
     return;
   }
 
+  /* State updates arrive every few seconds. Rebuilding the cards must not
+     slam an open Software section shut or throw away its loaded list. */
+  const openSoftware = new Set([...list.querySelectorAll("details[data-soft][open]")].map((item) => item.dataset.soft));
+
   list.innerHTML = nodes
     .map((node) => {
       const status = node.status || {};
       const gpu = status.gpu || {};
       const caps = status.capabilities || {};
+      const compat = node.compatibility || {};
+      const compatBad = compat.status && !["ok", "legacy"].includes(compat.status);
       return `<article class="card ${node.online ? "on" : "off"} bracket">
         <div class="card-top">
           <div>
             <h3>${esc(node.name)}</h3>
-            <p class="micro dim">NODE ${String(node.index || 0).padStart(2, "0")} · ${esc(node.host)}:${node.port}</p>
+            <p class="micro dim">NODE ${String(node.index || 0).padStart(2, "0")} · ${esc(node.host)}:${node.port} · NODE SOFTWARE ${node.nodeVersion ? "v" + esc(node.nodeVersion) : "UNKNOWN"} · PROTOCOL ${node.protocol == null ? "LEGACY" : esc(node.protocol)}</p>
           </div>
           <span class="badge ${node.online ? (nodeBusy(node) ? "run" : "ok") : "bad"}">${node.online ? (nodeBusy(node) ? "WORKING" : "ONLINE") : "OFFLINE"}</span>
         </div>
@@ -281,16 +283,30 @@ function renderNodes(nodes, state) {
           <div class="metric"><span>SCREEN</span><b>${caps.screen ? (caps.input ? "CONTROL" : "VIEW") : "—"}</b></div>
           <div class="metric"><span>SOUND</span><b>${caps.audio ? "LISTEN" : "—"}</b></div>
         </div>
+        ${compatBad ? `<p class="micro job-error">✕ ${esc(compat.reason || "This Node is not compatible with this Hub.")}</p>` : ""}
+        <details class="node-soft" data-soft="${esc(node.id)}">
+          <summary><span class="micro">SOFTWARE ON THIS MACHINE</span><span class="micro dim">DETECT · INSTALL · START</span></summary>
+          <div class="soft-body" data-soft-body="${esc(node.id)}"><p class="micro dim">OPEN TO READ WHAT IS INSTALLED ON ${esc(node.name.toUpperCase())}.</p></div>
+        </details>
         <div class="actions">
           <button class="btn tiny solid" data-act="focus" data-id="${node.id}">⤢ FOCUS</button>
           <button class="btn tiny" data-act="refresh" data-id="${node.id}">STATUS</button>
           <button class="btn tiny" data-act="screen" data-id="${node.id}">SCREEN</button>
-          <button class="btn tiny" data-act="apps" data-id="${node.id}">SOFTWARE</button>
           <button class="btn tiny danger" data-act="unpair" data-id="${node.id}">UNLINK</button>
         </div>
       </article>`;
     })
     .join("");
+
+  for (const id of openSoftware) {
+    const details = list.querySelector(`details[data-soft="${CSS.escape(id)}"]`);
+    if (!details) continue;
+    details.open = true;
+    const body = softBody(id);
+    if (!body) continue;
+    if (appsState.nodes.has(id)) renderNodeSoftware(id, body);
+    else void loadNodeSoftware(id);
+  }
 }
 
 const JOB_BADGE = { queued: "", running: "run", done: "ok", failed: "bad", cancelled: "bad", timeout: "bad" };
@@ -318,6 +334,15 @@ function jobDescription(job) {
   return job.label || job.op;
 }
 
+function jobOrigin(job) {
+  const source = String(job.source || "api").toLowerCase();
+  const who = job.createdBy ? ` by ${job.createdBy}` : " — created before the Hub recorded which client asked";
+  if (source === "api") return { badge: "API", why: `Sent to the Hub's REST API${who}.` };
+  if (source === "hub" || source === "app") return { badge: "APP", why: `Queued from the ATHENA app${who}.` };
+  if (source === "chat") return { badge: "CHAT", why: `Queued from a chat request${who}.` };
+  return { badge: source.toUpperCase(), why: `Origin reported as “${source}”${who}.` };
+}
+
 function jobFailure(job) {
   if (!["failed", "timeout", "cancelled"].includes(job.state)) return "";
   const reason = job.error || String(job.output || "").trim().split(/\r?\n/).filter(Boolean).pop() || (job.state === "cancelled" ? "Cancelled before it finished." : "No reason was reported.");
@@ -336,15 +361,16 @@ function renderJobs(jobs) {
       const badge = JOB_BADGE[job.state] || "";
       const failure = jobFailure(job);
       const output = String(job.output || "").trim();
-      const source = job.source ? String(job.source).toUpperCase() : "API";
+      const origin = jobOrigin(job);
       return `<article class="card bracket job" data-state="${esc(job.state)}">
         <div class="card-top">
           <div>
             <h3 style="font-size:13px">${esc(jobDescription(job))}</h3>
-            <p class="micro dim">${esc(nodeName(job.node))} · ${esc(job.op.toUpperCase())} · ${esc(source)}</p>
+            <p class="micro dim">${esc(nodeName(job.node))} · ${esc(job.op.toUpperCase())} · ${esc(origin.badge)}</p>
           </div>
           <span class="badge ${badge}">${esc(job.state)}</span>
         </div>
+        <p class="micro dim">WHY · ${esc(origin.why)}</p>
         <div class="job-times">
           <span class="micro dim">QUEUED ${esc(formatWhen(job.createdAt))}</span>
           <span class="micro dim">STARTED ${esc(formatWhen(job.startedAt))}</span>
@@ -356,6 +382,7 @@ function renderJobs(jobs) {
         ${output ? `<details class="job-output"><summary class="micro dim">OUTPUT (${output.length} CHARS)</summary><pre class="code">${esc(output.slice(-4000))}</pre></details>` : `<p class="micro dim">No output.</p>`}
         <div class="actions">
           <button class="btn tiny ghost" data-job="${job.id}">SEND TO CHAT</button>
+          ${output ? `<button class="btn tiny" data-copy-job="${job.id}">COPY OUTPUT</button>` : ""}
           ${["queued", "running"].includes(job.state) ? `<button class="btn tiny danger" data-cancel="${job.id}">CANCEL</button>` : ""}
         </div>
       </article>`;
@@ -529,29 +556,49 @@ let spokenChunks = [];
 let speakTimer = 0;
 let speakGen = 0;
 
-/** Splits a reply into mouth-sized pieces; Safari goes silent on long blocks. */
-function speechChunks(text) {
-  const clean = String(text)
-    .replace(/```[\s\S]*?```/g, " code block ")
-    .replace(/[*_#`>|]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!clean) return [];
-  const sentences = clean.match(/[^.!?…]+[.!?…]*/g) || [clean];
-  const chunks = [];
-  let current = "";
-  for (const sentence of sentences) {
-    const piece = sentence.trim();
-    if (!piece) continue;
-    if ((current + " " + piece).trim().length > 180) {
-      if (current) chunks.push(current.trim());
-      current = piece.length > 180 ? piece.slice(0, 180) : piece;
-    } else {
-      current = (current + " " + piece).trim();
-    }
+/** The installed voices, best first. Quality is a ranking, not a hard rule. */
+function availableVoices() {
+  if (!speechReady()) return [];
+  try {
+    return rankVoices(speechSynthesis.getVoices());
+  } catch {
+    return [];
   }
-  if (current) chunks.push(current.trim());
-  return chunks.slice(0, 12);
+}
+
+function selectedVoice(voices = availableVoices()) {
+  return voices.find((voice) => voice.name === store.voice.name) || voices[0] || null;
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
+}
+
+function renderVoicePanel() {
+  const pick = $("#voice-pick");
+  if (!pick) return;
+  const voices = availableVoices();
+  if (!voices.length) {
+    pick.innerHTML = `<option value="">No speech voices reported yet</option>`;
+    pick.disabled = true;
+  } else {
+    pick.disabled = false;
+    const chosen = selectedVoice(voices);
+    pick.innerHTML = voices
+      .map((voice) => `<option value="${esc(voice.name)}"${voice.name === chosen?.name ? " selected" : ""}>${esc(voiceLabel(voice))}</option>`)
+      .join("");
+  }
+  const rate = $("#voice-rate");
+  const pitch = $("#voice-pitch");
+  if (rate) rate.value = String(store.voice.rate);
+  if (pitch) pitch.value = String(store.voice.pitch);
+  const note = $("#voice-note");
+  if (note) {
+    note.textContent = voices.length
+      ? `${voices.length} voice${voices.length === 1 ? "" : "s"} installed on this device · ${voices[0].name} sounds most natural here. Speech is generated by this browser, not by the hub.`
+      : "This browser has not reported any voices. On Windows, add voices in Settings → Time & language → Speech. On iOS, they download in Settings → Accessibility → Spoken Content.";
+  }
 }
 
 function speakNext(gen) {
@@ -560,15 +607,12 @@ function speakNext(gen) {
   speakTimer = 0;
   if (!spokenChunks.length) return;
   const utterance = new SpeechSynthesisUtterance(spokenChunks.shift());
-  utterance.rate = 1.02;
-  utterance.pitch = 0.92;
+  /* 1.0 instead of 1.02/0.92: the old lowered pitch and slightly fast rate
+     were most of the "robot" impression. The user can tune both. */
+  utterance.rate = clampNumber(store.voice.rate, 0.7, 1.5, 1);
+  utterance.pitch = clampNumber(store.voice.pitch, 0.7, 1.4, 1);
   utterance.volume = 1;
-  const voices = speechSynthesis.getVoices();
-  const english = voices.filter((voice) => /^en[-_]/i.test(voice.lang));
-  const preferred =
-    english.find((voice) => /samantha|serena|aria|zira|female/i.test(voice.name)) ||
-    english[0] ||
-    null;
+  const preferred = selectedVoice();
   if (preferred) utterance.voice = preferred;
   utterance.onend = () => speakNext(gen);
   utterance.onerror = () => speakNext(gen);
@@ -1158,93 +1202,83 @@ function syncMute() {
   for (const { el } of audioState.streams.values()) el.muted = audioState.muted;
 }
 
-/* ─────────────────────────────────────────────────────────── apps */
+/* ────────────────────────────────────────────── software (per node) */
 
 const appsState = { catalogue: [], nodes: new Map(), busy: new Set() };
 
-async function loadApps() {
-  const grid = $("#app-list");
-  if (!grid) return;
-  const nodes = (store.state?.nodes || []);
-  if (!nodes.length) {
-    grid.innerHTML = `<div class="empty"><p class="micro dim">NO MACHINES LINKED</p><p class="micro dim" style="margin-top:8px">SOFTWARE INSTALLS ON A NODE — START ONE, THEN NODES → SCAN</p></div>`;
-    return;
-  }
-  grid.innerHTML = `<p class="micro dim">READING SOFTWARE ON ${nodes.length} MACHINE${nodes.length === 1 ? "" : "S"}…</p>`;
-  try {
-    if (!appsState.catalogue.length) appsState.catalogue = (await api("/api/apps")).apps || [];
-  } catch (error) {
-    grid.innerHTML = `<div class="empty"><p class="micro dim">${esc(error.message)}</p></div>`;
-    return;
-  }
-  appsState.nodes.clear();
-  await Promise.all(
-    nodes.map(async (node) => {
-      if (!node.online) {
-        appsState.nodes.set(node.id, null);
-        return;
-      }
-      try {
-        const res = await api(`/api/nodes/${encodeURIComponent(node.id)}/action`, { method: "POST", body: { op: "apps", args: {} } });
-        appsState.nodes.set(node.id, res.result?.apps || []);
-      } catch (error) {
-        appsState.nodes.set(node.id, { error: error.message });
-      }
-    })
-  );
-  renderApps();
+/** Software is a property of a machine, so it is read and shown per node. */
+function softBody(nodeId) {
+  return document.querySelector(`[data-soft-body="${CSS.escape(nodeId)}"]`);
 }
 
-function renderApps() {
-  const grid = $("#app-list");
-  if (!grid) return;
-  const nodes = store.state?.nodes || [];
-  if (!nodes.length) return;
-  grid.innerHTML = appsState.catalogue
+async function softwareCatalogue() {
+  if (!appsState.catalogue.length) {
+    const res = await api("/api/apps");
+    appsState.catalogue = res.apps || [];
+  }
+  return appsState.catalogue;
+}
+
+async function loadNodeSoftware(nodeId, { force = false } = {}) {
+  const body = softBody(nodeId);
+  if (!body) return;
+  const node = (store.state?.nodes || []).find((item) => item.id === nodeId);
+  if (!node) return;
+  if (!node.online) {
+    body.innerHTML = `<p class="micro dim">OFFLINE — SOFTWARE IS READ ON THE MACHINE ITSELF. START THAT NODE, THEN STATUS.</p>`;
+    return;
+  }
+  if (appsState.nodes.has(nodeId) && !force) {
+    renderNodeSoftware(nodeId, body);
+    return;
+  }
+  body.innerHTML = `<p class="micro dim">READING INSTALLED SOFTWARE ON ${esc(node.name.toUpperCase())}…</p>`;
+  try {
+    await softwareCatalogue();
+    const res = await api(`/api/nodes/${encodeURIComponent(nodeId)}/action`, { method: "POST", body: { op: "apps", args: {} } });
+    appsState.nodes.set(nodeId, res.result?.apps || []);
+    renderNodeSoftware(nodeId, body);
+  } catch (error) {
+    body.innerHTML = `<p class="micro job-error">${esc(error.message)}</p>`;
+  }
+}
+
+function renderNodeSoftware(nodeId, body) {
+  const list = appsState.nodes.get(nodeId);
+  if (!Array.isArray(list)) {
+    body.innerHTML = `<p class="micro job-error">That machine did not return a software list.</p>`;
+    return;
+  }
+  body.innerHTML = `<div class="app-rows">${appsState.catalogue
     .map((app) => {
-      const rows = nodes
-        .map((node) => {
-          const list = appsState.nodes.get(node.id);
-          const found = Array.isArray(list) ? list.find((item) => item.id === app.id) : null;
-          const busy = appsState.busy.has(`${node.id}:${app.id}`);
-          const badge = !node.online
-            ? `<span class="badge bad">OFFLINE</span>`
-            : !found
-              ? `<span class="badge">?</span>`
-              : found.running
-                ? `<span class="badge run">RUNNING</span>`
-                : found.installed
-                  ? `<span class="badge ok">INSTALLED</span>`
-                  : `<span class="badge bad">MISSING</span>`;
-          const buttons = [];
-          if (!busy && found && !found.installed) {
-            buttons.push(`<button class="btn tiny solid" data-app="install" data-node="${esc(node.id)}" data-id="${app.id}">INSTALL</button>`);
-          }
-          if (!busy && app.service && found?.installed) {
-            buttons.push(
-              found.running
-                ? `<button class="btn tiny" data-app="stop" data-node="${esc(node.id)}" data-id="${app.id}">STOP</button>`
-                : `<button class="btn tiny" data-app="start" data-node="${esc(node.id)}" data-id="${app.id}">START</button>`
-            );
-          }
-          return `<div class="app-row">
-            <div class="app-row-head"><span class="micro">${esc(node.name)}</span>${badge}</div>
-            <p class="micro dim">${esc(busy ? "WORKING…" : found?.note || "")}</p>
-            <div class="actions">${buttons.join("")}</div>
-          </div>`;
-        })
-        .join("");
-      return `<article class="card bracket app-card" id="app-${app.id}">
-        <div class="app-head">
-          <div><h3>${esc(app.name)}</h3><p class="micro dim">${esc(app.tag)} · ${esc(app.size)}</p></div>
-          <span class="badge">${app.service ? "SERVICE" : "TOOL"}</span>
-        </div>
-        <p class="micro dim">${esc(app.blurb)}</p>
-        ${app.detail ? `<p class="micro dim">${esc(app.detail)}</p>` : ""}
-        <div class="app-rows">${rows}</div>
-      </article>`;
+      const found = list.find((item) => item.id === app.id);
+      const busy = appsState.busy.has(`${nodeId}:${app.id}`);
+      const badge = !found
+        ? `<span class="badge">?</span>`
+        : found.running
+          ? `<span class="badge run">RUNNING</span>`
+          : found.installed
+            ? `<span class="badge ok">INSTALLED</span>`
+            : `<span class="badge bad">MISSING</span>`;
+      const buttons = [];
+      if (!busy && found && !found.installed) {
+        buttons.push(`<button class="btn tiny solid" data-app="install" data-node="${esc(nodeId)}" data-id="${app.id}">INSTALL</button>`);
+      }
+      if (!busy && app.service && found?.installed) {
+        buttons.push(
+          found.running
+            ? `<button class="btn tiny" data-app="stop" data-node="${esc(nodeId)}" data-id="${app.id}">STOP</button>`
+            : `<button class="btn tiny" data-app="start" data-node="${esc(nodeId)}" data-id="${app.id}">START</button>`
+        );
+      }
+      return `<div class="app-row">
+        <div class="app-row-head"><span class="micro">${esc(app.name)}</span>${badge}</div>
+        <p class="micro dim">${esc(busy ? "WORKING…" : found?.note || `${app.tag} · ${app.size}`)}</p>
+        <div class="actions">${buttons.join("")}</div>
+      </div>`;
     })
-    .join("");
+    .join("")}</div>
+    <p class="micro dim">INSTALL AND START RUN ON THIS MACHINE ONLY.</p>`;
 }
 
 async function appAction(nodeId, appId, action, button) {
@@ -1254,7 +1288,8 @@ async function appAction(nodeId, appId, action, button) {
     button.setAttribute("aria-busy", "true");
     button.disabled = true;
   }
-  renderApps();
+  const body = softBody(nodeId);
+  if (body) renderNodeSoftware(nodeId, body);
   try {
     const res = await api(`/api/nodes/${encodeURIComponent(nodeId)}/action`, {
       method: "POST",
@@ -1262,12 +1297,12 @@ async function appAction(nodeId, appId, action, button) {
     });
     const result = res.result || {};
     if (result.ok === false) throw new Error(result.error || result.note || "The machine refused that.");
-    toast(`${appId.toUpperCase()} · ${action.toUpperCase()} DONE`, 3600);
+    toast(`${appId.toUpperCase()} · ${action.toUpperCase()} DONE ON THAT MACHINE`, 3600);
   } catch (error) {
     toast(error.message, 6500);
   }
   appsState.busy.delete(key);
-  await loadApps();
+  await loadNodeSoftware(nodeId, { force: true });
 }
 
 /* ─────────────────────────────────────────────────────── integrations */
@@ -1398,7 +1433,6 @@ function switchView(view) {
   $$(".tabs button").forEach((button) => button.classList.toggle("active", button.dataset.tab === view));
   requestAnimationFrame(moveTabGlide);
   if (view === "jobs") void loadJobs();
-  if (view === "apps") void loadApps();
   if (view === "system") {
     renderSystem(store.state);
     void brainStatus();
@@ -1482,7 +1516,6 @@ async function scan() {
 async function act(nodeId, op) {
   if (op === "focus") return focusNode(nodeId);
   if (op === "screen") return switchView("screen");
-  if (op === "apps") return switchView("apps");
   if (op === "unpair") {
     if (!confirm("Unlink this machine? ATHENA will lose control of it.")) return;
     await api(`/api/nodes/${encodeURIComponent(nodeId)}`, { method: "DELETE" }).catch((error) => toast(error.message));
@@ -1509,12 +1542,7 @@ $$(".tabs button").forEach((button) => {
   button.onclick = () => switchView(button.dataset.tab);
 });
 
-/* ─────────────────────────────────────────────────────────── mode & look */
-
-$("#mode").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-mode]");
-  if (button && button.dataset.mode !== store.mode) setMode(button.dataset.mode);
-});
+/* ─────────────────────────────────────────────────────────── look */
 
 $("#swatches").addEventListener("click", (event) => {
   const button = event.target.closest("[data-accent]");
@@ -1523,6 +1551,53 @@ $("#swatches").addEventListener("click", (event) => {
   localStorage.setItem("athena.accent", store.look.accent);
   applyLook();
 });
+
+/* Voice settings are per device: a phone and a desktop have different voices. */
+function saveVoiceSetting() {
+  store.voice.rate = clampNumber(store.voice.rate, 0.75, 1.35, 1);
+  store.voice.pitch = clampNumber(store.voice.pitch, 0.85, 1.25, 1);
+  localStorage.setItem("athena.voice", store.voice.name || "");
+  localStorage.setItem("athena.voiceRate", String(store.voice.rate));
+  localStorage.setItem("athena.voicePitch", String(store.voice.pitch));
+  const rate = $("#voice-rate-label");
+  const pitch = $("#voice-pitch-label");
+  if (rate) rate.textContent = `${store.voice.rate.toFixed(2)}×`;
+  if (pitch) pitch.textContent = store.voice.pitch.toFixed(2);
+}
+
+$("#voice-pick")?.addEventListener("change", (event) => {
+  store.voice.name = event.target.value;
+  saveVoiceSetting();
+  if (store.speak) speak("This is my voice.");
+});
+
+for (const id of ["#voice-rate", "#voice-pitch"]) {
+  $(id)?.addEventListener("input", (event) => {
+    if (id === "#voice-rate") store.voice.rate = clampNumber(event.target.value, 0.75, 1.35, 1);
+    else store.voice.pitch = clampNumber(event.target.value, 0.85, 1.25, 1);
+    saveVoiceSetting();
+  });
+}
+
+$("#voice-test")?.addEventListener("click", () => {
+  const wasOff = !store.speak;
+  if (wasOff) {
+    store.speak = true;
+    localStorage.setItem("athena.speak", "1");
+    $("#speak-toggle").innerHTML = "VOICE <b>ON</b>";
+  }
+  primeVoice();
+  speak("Athena online. This is how I sound on this device. I can read version 3 point 0 point 0 and GPU temperatures out loud.");
+});
+
+$("#voice-reset")?.addEventListener("click", () => {
+  store.voice = { name: "", rate: 1, pitch: 1 };
+  saveVoiceSetting();
+  renderVoicePanel();
+  toast("Voice reset to the most natural installed option.", 3200);
+});
+
+if (speechReady()) speechSynthesis.addEventListener("voiceschanged", renderVoicePanel);
 
 $("#cfg-motion").addEventListener("input", (event) => {
   store.look.motion = event.target.value;
@@ -1664,7 +1739,11 @@ $("#pair").onclick = async () => {
 
 $("#node-list").addEventListener("click", (event) => {
   const button = event.target.closest("[data-act]");
-  if (button) void act(button.dataset.id, button.dataset.act);
+  if (button) return void act(button.dataset.id, button.dataset.act);
+  const software = event.target.closest("[data-app]");
+  if (software) return void appAction(software.dataset.node, software.dataset.id, software.dataset.app, software);
+  const summary = event.target.closest("details[data-soft] > summary");
+  if (summary) void loadNodeSoftware(summary.parentElement.dataset.soft);
 });
 
 $("#screen-redraw").onclick = () => {
@@ -1678,16 +1757,6 @@ $("#screen-mute").onclick = () => {
   syncMute();
   toast(audioState.muted ? "Sound muted." : "Sound back on.");
 };
-
-$("#apps-refresh").onclick = () => {
-  void loadApps();
-};
-
-$("#app-list").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-app]");
-  if (!button) return;
-  void appAction(button.dataset.node, button.dataset.id, button.dataset.app, button);
-});
 
 $("#int-add").onclick = async (event) => {
   const button = event.currentTarget;
@@ -1829,12 +1898,10 @@ $("#screen-grid").addEventListener("click", (event) => {
     return;
   }
   if (event.target.matches("[data-img]")) {
-    /* on a phone a 16:9 thumbnail is too small to aim at — open it instead */
-    if (store.mode === "basic") {
-      focusNode(id);
-      return;
-    }
-    void screenAct(id, { op: "click", ...screenPoint(event.target, event) });
+    /* A preview is navigation, always. Remote clicks happen on the focused
+       screen, where the full-size image makes the target predictable. The old
+       BASIC/ADV toggle silently changed this and caused misclicks. */
+    focusNode(id);
   }
 });
 
@@ -1857,12 +1924,24 @@ $("#screen-grid").addEventListener("submit", (event) => {
   void screenAct(form.dataset.form, { op: "type", text });
 });
 
-$("#job-list").addEventListener("click", (event) => {
+$("#job-list").addEventListener("click", async (event) => {
   const detail = event.target.closest("[data-job]");
   if (detail) {
     const job = (store.state?.jobs || []).find((item) => item.id === detail.dataset.job);
     if (job) addMessage("athena", `Job ${job.id} · ${job.state}\n$ ${job.args?.command || job.op}`, { code: job.output || "(no output)" });
     switchView("home");
+  }
+  const copy = event.target.closest("[data-copy-job]");
+  if (copy) {
+    const job = (store.state?.jobs || []).find((item) => item.id === copy.dataset.copyJob);
+    if (!job) return;
+    try {
+      await navigator.clipboard.writeText(String(job.output || ""));
+      toast("Output copied.");
+    } catch {
+      toast("Select the output and copy it by hand.");
+    }
+    return;
   }
   const cancel = event.target.closest("[data-cancel]");
   if (cancel) {
@@ -2021,6 +2100,10 @@ async function sessionStillValid() {
 
 async function boot() {
   applyLook();
+  saveVoiceSetting();
+  renderVoicePanel();
+  /* Chrome populates the voice list asynchronously after the first call. */
+  setTimeout(renderVoicePanel, 400);
   spawnSparks();
   /* On the hub PC, auto-unlock. A phone needs a session the hub still knows. */
   const unlocked = (await localUnlock()) || (await sessionStillValid());

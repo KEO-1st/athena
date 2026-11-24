@@ -75,6 +75,19 @@ test("cancelling a running job stops it on the node and is not overwritten", asy
   assert.equal(job.state, "cancelled", "the completion must not turn a cancelled job back into done");
 });
 
+test("a job records who created it, not just a guessed source", async (t) => {
+  const dir = tempDir("athena-jobs-origin");
+  t.after(() => removeDir(dir));
+  const jobs = new Jobs(path.join(dir, "jobs.json"), {});
+  const keyed = jobs.create({ node: "node_fake", op: "run", args: { command: "echo hi" }, source: "api", createdBy: "API key “ci”" });
+  assert.equal(keyed.source, "api");
+  assert.equal(keyed.createdBy, "API key “ci”");
+
+  const old = jobs.create({ node: "node_fake", op: "run", args: {} });
+  assert.equal(old.source, "api", "an old client still produces a usable source");
+  assert.equal(old.createdBy, null, "provenance is not invented");
+});
+
 test("a finished job cannot be cancelled", async (t) => {
   const fake = await startFakeNode();
   const dir = tempDir("athena-jobs-done");

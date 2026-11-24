@@ -18,7 +18,8 @@ import fs from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { VERSION } from "../lib/version.mjs";
+import { NODE_VERSION } from "./version.mjs";
+import { MAX_HUB_PROTOCOL, MIN_HUB_PROTOCOL, NODE_FEATURES, NODE_PROTOCOL, helloInfo, hubProtocolSupported } from "./protocol.mjs";
 import { APP_SPECS } from "../lib/app-catalog.mjs";
 import { asUrl, programCandidates, resolveProgramTarget } from "./programs.mjs";
 import {
@@ -1173,7 +1174,10 @@ async function status() {
   return {
     id: state.id,
     name: config.name,
-    version: VERSION,
+    version: NODE_VERSION,
+    nodeVersion: NODE_VERSION,
+    protocol: NODE_PROTOCOL,
+    features: [...NODE_FEATURES],
     hub: state.hub,
     state: state.token ? "linked" : "ready",
     index: state.index,
@@ -1219,6 +1223,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(statusCode, {
       "Content-Type": type,
       "Cache-Control": "no-store",
+      "x-athena-node-protocol": String(NODE_PROTOCOL),
       ...corsHeadersFor(req),
     });
     res.end(payload);
@@ -1227,6 +1232,17 @@ const server = http.createServer(async (req, res) => {
   const body = () => readJsonBody(req, { limit: 512 * 1024 });
 
   if (!hostAllowed(req)) return send(403, { error: "This node only answers to its own address." });
+  /* A Hub newer than this Node's contract is refused explicitly instead of
+     half-working. Nodes and Hubs are updated independently, so this check is
+     the guard that keeps an old Node usable and honest. */
+  const hubProtocol = req.headers["x-athena-hub-protocol"];
+  if (hubProtocol && !hubProtocolSupported(hubProtocol)) {
+    return send(426, {
+      error: `This Node speaks Hub protocol ${MIN_HUB_PROTOCOL}–${MAX_HUB_PROTOCOL}; the Hub sent ${hubProtocol}. Update ATHENA Node on this PC.`,
+      nodeProtocol: NODE_PROTOCOL,
+      nodeVersion: NODE_VERSION,
+    });
+  }
   if (req.headers.origin && !originAllowed(req, req.headers.origin)) {
     return send(403, { error: "That origin is not allowed." });
   }
@@ -1244,7 +1260,7 @@ const server = http.createServer(async (req, res) => {
       return send(
         200,
         html
-          .replaceAll("__VERSION__", VERSION)
+          .replaceAll("__VERSION__", NODE_VERSION)
           .replaceAll("__NAME__", config.name)
           .replaceAll("__CODE__", showCode ? config.code : "• • • • • •")
           .replaceAll("__CODENOTE__", showCode ? "Read this out on the hub" : "Visible on the node's own screen only"),
@@ -1257,7 +1273,8 @@ const server = http.createServer(async (req, res) => {
       return send(200, {
         id: state.id,
         name: config.name,
-        version: VERSION,
+        version: NODE_VERSION,
+        ...helloInfo(),
         port: config.port,
         state: state.token ? "linked" : "ready",
         linkedTo: state.hub,
@@ -1582,7 +1599,10 @@ udp.on("message", async (message, rinfo) => {
           id: state.id,
           name: config.name,
           port: config.port,
-          version: VERSION,
+          version: NODE_VERSION,
+          nodeVersion: NODE_VERSION,
+          protocol: NODE_PROTOCOL,
+          features: [...NODE_FEATURES],
           state: state.token ? "linked" : "ready",
           gpu: gpu?.name || null,
           vramGb: gpu?.vramGb ?? null,
@@ -1636,7 +1656,7 @@ server.on("error", (error) => {
 server.listen(config.port, "0.0.0.0", () => {
   const addresses = lanAddresses().map((item) => item.address);
   console.log("");
-  console.log("  ATHENA NODE " + VERSION + "  ·  " + config.name);
+  console.log("  ATHENA NODE " + NODE_VERSION + "  ·  " + config.name);
   console.log("");
   console.log("  ╔════════════════════════════════════════╗");
   console.log("  ║   PAIRING CODE   " + String(config.code).padEnd(22) + "║");

@@ -25,3 +25,10 @@ test("source files no longer hard-code a version", () => {
   assert.match(sw, /__ATHENA_VERSION__/, "the hub substitutes the version into the service worker");
   assert.doesNotMatch(sw, /\?v=\d+/, "asset URLs are versioned by the cache name, not a query string");
 });
+
+test("the Node version has its own source of truth", () => {
+  const nodeFile = JSON.parse(fs.readFileSync(path.join(ROOT, "node", "version.json"), "utf8"));
+  assert.match(nodeFile.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(nodeFile.name, "athena-node");
+  assert.ok(Number.isInteger(nodeFile.protocol));
+});

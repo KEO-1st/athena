@@ -152,7 +152,7 @@ export async function startHub({ dataDir } = {}) {
  * A pretend node: enough of the real protocol to prove job locking, recovery,
  * cancellation and redaction without Windows, a GPU or a 47910 listener.
  */
-export async function startFakeNode({ token = "fake-token", onCancel } = {}) {
+export async function startFakeNode({ token = "fake-token", onCancel, protocol = 1, nodeVersion = "0.1.0", features = ["status"] } = {}) {
   const tasks = new Map();
   const cancels = [];
   let seq = 0;
@@ -171,6 +171,21 @@ export async function startFakeNode({ token = "fake-token", onCancel } = {}) {
       res.end(JSON.stringify(body));
     };
 
+    if (url.pathname === "/api/hello") {
+      return send(200, {
+        id: "node_fake",
+        name: "Fake node",
+        version: nodeVersion,
+        nodeVersion,
+        protocol,
+        features,
+        port,
+        codeRequired: false,
+      });
+    }
+    if (url.pathname === "/api/link" && req.method === "POST") {
+      return send(200, { ok: true, id: "node_fake", name: "Fake node", token, index: 1, gpu: "Fake GPU" });
+    }
     if (url.pathname === "/api/status") {
       if (req.headers["x-athena-token"] !== token) return send(403, { error: "Bad token." });
       return send(200, { id: "node_fake", name: "Fake node", version: "test", gpu: { name: "Fake GPU", vramGb: 8 }, tasks: [] });

@@ -4,6 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { ROOT, freePort, removeDir, request, sleep, stopChild, tempDir } from "./helpers.mjs";
+import { NODE_PROTOCOL } from "../node/protocol.mjs";
+import { NODE_VERSION } from "../node/version.mjs";
 
 const dir = tempDir("athena-node");
 const port = await freePort();
@@ -76,6 +78,30 @@ test("loopback alone is not enough for the local API", async () => {
 test("the node only answers to its own host", async () => {
   const res = await request(port, "/api/hello", { host: "evil.example" });
   assert.equal(res.status, 403);
+});
+
+test("hello advertises the Node's own version and protocol", async () => {
+  const res = await request(port, "/api/hello");
+  assert.equal(res.status, 200);
+  assert.equal(res.json.protocol, NODE_PROTOCOL);
+  assert.equal(res.json.nodeVersion, NODE_VERSION);
+  assert.ok(res.json.features.includes("status"));
+  assert.equal(res.headers["x-athena-node-protocol"], String(NODE_PROTOCOL));
+});
+
+test("a Hub protocol this Node cannot speak is refused, not half-answered", async () => {
+  const res = await request(port, "/api/hello", { headers: { "x-athena-hub-protocol": "999" } });
+  assert.equal(res.status, 426);
+  assert.match(res.json.error, /Hub protocol/);
+  assert.equal(res.json.nodeProtocol, NODE_PROTOCOL);
+});
+
+test("status carries the protocol fields an older Hub can ignore", async () => {
+  const res = await request(port, "/api/status", { headers: { "x-athena-token": "hubtok" } });
+  assert.equal(res.status, 200);
+  assert.equal(res.json.protocol, NODE_PROTOCOL);
+  assert.equal(res.json.nodeVersion, NODE_VERSION);
+  assert.ok(Array.isArray(res.json.features));
 });
 
 test("the pairing code is never written to the boot log", () => {
