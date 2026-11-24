@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { VERSION } from "../lib/version.mjs";
 import { APP_SPECS } from "../lib/app-catalog.mjs";
+import { asUrl, programCandidates, resolveProgramTarget } from "./programs.mjs";
 import {
   HttpError,
   applyCors,
@@ -195,6 +196,84 @@ function tokenOk(req) {
 }
 
 /* ---------------------------------------------------------------- hardware */
+
+/* Top processes by memory. Cached briefly: the same call is used by the
+   "what is running" question and by launch verification. */
+let processCache = { at: 0, value: null };
+
+function parseTasklist(text) {
+  const rows = [];
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const match = line.match(/^"([^"]+)","(\d+)","[^"]*","(\d+)","([\d,]+)\s*K"/i);
+    if (!match) continue;
+    rows.push({
+      name: match[1],
+      pid: Number(match[2]),
+      memMb: Number(String(match[4]).replace(/[^\d]/g, "")) / 1024,
+    });
+  }
+  return rows;
+}
+
+async function rawProcessRows() {
+  if (IS_WIN) {
+    const res = await run("tasklist", ["/fo", "csv", "/nh"], { timeout: 10_000 });
+    return parseTasklist(res.out);
+  }
+  const res = await run("ps", ["-eo", "pid,rss,comm", "--sort=-rss"], { timeout: 10_000 });
+  return String(res.out || "")
+    .split(/\r?\n/)
+    .slice(1)
+    .map((line) => {
+      const parts = line.trim().split(/\s+/);
+      const pid = Number(parts[0]);
+      const rss = Number(parts[1]);
+      const name = parts.slice(2).join(" ") || "process";
+      return Number.isFinite(pid) ? { name, pid, memMb: (Number.isFinite(rss) ? rss : 0) / 1024 } : null;
+    })
+    .filter(Boolean);
+}
+
+async function processNames() {
+  const rows = await rawProcessRows();
+  return new Set(rows.map((row) => path.basename(String(row.name)).toLowerCase()));
+}
+
+async function waitForAnyProcess(names, timeoutMs = 4500) {
+  const wanted = [...new Set(names.map((name) => path.basename(String(name)).toLowerCase()).filter(Boolean))];
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const live = await processNames();
+    const hit = wanted.find((name) => live.has(name));
+    if (hit) return hit;
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  } while (Date.now() < deadline);
+  return null;
+}
+
+async function topProcesses(limit = 12) {
+  if (processCache.value && Date.now() - processCache.at < 4000) return processCache.value;
+  const rows = await rawProcessRows();
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = String(row.name).toLowerCase();
+    const found = grouped.get(key) || { name: row.name, memMb: 0, count: 0, pid: null };
+    found.memMb += row.memMb || 0;
+    found.count += 1;
+    if (!found.pid) found.pid = row.pid;
+    grouped.set(key, found);
+  }
+  const value = {
+    processes: [...grouped.values()]
+      .sort((a, b) => b.memMb - a.memMb)
+      .slice(0, limit)
+      .map((item) => ({ name: item.name, memMb: Math.round(item.memMb), pid: item.pid, count: item.count })),
+    total: rows.length,
+    at: new Date().toISOString(),
+  };
+  processCache = { at: Date.now(), value };
+  return value;
+}
 
 let gpuCache = { at: 0, value: null };
 
@@ -474,6 +553,24 @@ let lastFrame = null;
 let lastScreenAt = 0;
 let captureRunning = false;
 let captureInFlight = null;
+const frameStats = { frames: 0, since: Date.now(), fps: 0 };
+let lastCaptureAt = 0;
+
+/** Measured, never assumed: frames actually captured per second. */
+function noteFrame() {
+  lastCaptureAt = Date.now();
+  frameStats.frames += 1;
+  const elapsed = Date.now() - frameStats.since;
+  if (elapsed >= 1500) {
+    frameStats.fps = Math.round((frameStats.frames / (elapsed / 1000)) * 10) / 10;
+    frameStats.frames = 0;
+    frameStats.since = Date.now();
+  }
+}
+
+function measuredFps() {
+  return Date.now() - lastCaptureAt > 2500 ? 0 : frameStats.fps;
+}
 
 function hostAvailable() {
   return IS_WIN && Object.values(HOST_FILES).every((file) => fs.existsSync(file));
@@ -589,6 +686,7 @@ async function captureFrame() {
     height: reply.height,
     screen: { x: reply.screenX, y: reply.screenY, width: reply.screenW, height: reply.screenH },
   };
+  noteFrame();
   return lastFrame;
 }
 
@@ -601,7 +699,13 @@ function captureOnce() {
   return captureInFlight;
 }
 
-/** Keeps a fresh-ish frame in memory while somebody is watching, then idles. */
+/**
+ * Keeps frames coming while somebody is watching, then idles. The old loop
+ * slept 200 ms on top of each capture, which capped the screen at about five
+ * frames a second before the network was even involved. Now it sleeps only
+ * the time left in a 70 ms budget, so a fast capture runs at ~14 fps and a
+ * slow one throttles itself instead of piling up.
+ */
 function startCaptureLoop() {
   lastScreenAt = Date.now();
   if (captureRunning) return;
@@ -609,13 +713,16 @@ function startCaptureLoop() {
   (async () => {
     try {
       while (Date.now() - lastScreenAt < 15_000) {
+        const started = Date.now();
         try {
           await captureOnce();
         } catch (error) {
           log("capture: " + (error?.message || error));
-          await new Promise((resolve) => setTimeout(resolve, 2000));
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          continue;
         }
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        const spent = Date.now() - started;
+        await new Promise((resolve) => setTimeout(resolve, Math.max(20, 70 - spent)));
       }
     } finally {
       captureRunning = false;
@@ -626,7 +733,9 @@ function startCaptureLoop() {
 async function screenFrame() {
   lastScreenAt = Date.now();
   startCaptureLoop();
-  if (!lastFrame || Date.now() - lastFrame.at > 900) {
+  /* Serving the frame we already have beats waiting for a new one: at 10 fps
+     the freshest frame is at most 100 ms old. */
+  if (!lastFrame || Date.now() - lastFrame.at > 120) {
     try {
       await captureOnce();
     } catch (error) {
@@ -943,74 +1052,86 @@ async function appInstall(id) {
 }
 
 /**
- * Open any program on this machine by name or path.
+ * Open any program on this machine by name or path, or a URL in a browser,
+ * and verify that something actually started.
  *
- * The catalogue only covers things ATHENA installs itself; "open chrome" has
- * to work for everything else. Windows resolves a bare name through App Paths
- * (`start chrome`), so the common browsers get an explicit path first.
+ * The old version fired `start` and always returned ok. "Task Manager" both
+ * failed (the name never matched Taskmgr.exe) and was reported as opened.
+ * Names are normalised in programs.mjs, and every launch now waits for a real
+ * process before it is called a success.
  */
-const WIN_APPS = {
-  chrome: [
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    "%LOCALAPPDATA%\\Google\\Chrome\\Application\\chrome.exe",
-  ],
-  edge: [
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-  ],
-  firefox: ["C:\\Program Files\\Mozilla Firefox\\firefox.exe", "C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe"],
-  notepad: ["C:\\Windows\\System32\\notepad.exe"],
-  explorer: ["C:\\Windows\\explorer.exe"],
-  calc: ["C:\\Windows\\System32\\calc.exe"],
-  calculator: ["C:\\Windows\\System32\\calc.exe"],
-  cmd: ["C:\\Windows\\System32\\cmd.exe"],
-  powershell: ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"],
-  taskmgr: ["C:\\Windows\\System32\\Taskmgr.exe"],
-};
-
-function resolveProgram(name) {
-  const raw = String(name || "").trim().replace(/^"|"$/g, "");
-  if (!raw) return null;
-  const expand = (p) => p.replace(/%([^%]+)%/g, (_, key) => process.env[key] || process.env[key.toUpperCase()] || "");
-  if (/[\\/]/.test(raw) && fs.existsSync(raw)) return raw;
-  if (fs.existsSync(raw)) return raw;
-  const base = path.basename(raw).replace(/\.exe$/i, "").toLowerCase();
-  const known = WIN_APPS[base] || [];
-  for (const candidate of known) {
-    const full = expand(candidate);
-    if (full && fs.existsSync(full)) return full;
-  }
-  const onPath = binOnPath(base) || binOnPath(`${base}.exe`);
-  if (onPath) return onPath;
-  return null;
+function launchDetached(file, args = []) {
+  const child = spawn(file, args, { detached: true, stdio: "ignore", windowsHide: true });
+  child.on("error", (error) => log(`launch ${file} failed: ${error.message}`));
+  child.unref();
 }
 
 async function openProgram(args = {}) {
-  const wanted = String(args.path || args.app || args.name || "").trim();
-  if (!wanted) throw new Error("Which program? Give me a name like chrome or a full path.");
-  const target = resolveProgram(wanted);
-  const extra = Array.isArray(args.args) ? args.args.map(String) : [];
-  const file = target || wanted;
+  const raw = String(args.path || args.app || args.name || "").trim();
+  const requestedUrl = asUrl(args.url) || (raw ? asUrl(raw) : null);
+  const browserName = String(args.browser || "").trim();
 
-  if (IS_WIN) {
-    /* `start` is what turns a name, a path or a URL into a real window. It
-       returns immediately, so the node is not held open by the app. */
-    const child = spawn("cmd", ["/c", "start", "", file, ...extra], { detached: true, stdio: "ignore", windowsHide: true });
-    child.unref();
-  } else {
-    const child = spawn(file, extra, { detached: true, stdio: "ignore" });
-    child.unref();
+  if (requestedUrl) {
+    let browserTarget = null;
+    if (browserName) {
+      browserTarget = resolveProgramTarget(browserName);
+      if (!browserTarget) throw new Error(`I could not find a browser called "${browserName}" on this machine.`);
+    }
+    if (browserTarget) launchDetached(browserTarget, [requestedUrl]);
+    else if (IS_WIN) launchDetached("cmd", ["/c", "start", "", requestedUrl]);
+    else if (process.platform === "darwin") launchDetached("open", [requestedUrl]);
+    else launchDetached("xdg-open", [requestedUrl]);
+
+    const exeNames = browserTarget
+      ? [path.basename(browserTarget)]
+      : ["chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"];
+    const seen = await waitForAnyProcess(exeNames, 4500);
+    if (!seen) {
+      return { ok: false, error: `The browser was asked to open ${requestedUrl} but no browser process appeared.`, url: requestedUrl };
+    }
+    const label = String(browserTarget ? path.basename(browserTarget) : seen).replace(/\.exe$/i, "");
+    return { ok: true, opened: `${label} · ${requestedUrl}`, url: requestedUrl, browser: label, verified: "process" };
   }
 
-  /* Give it a moment so a bad name fails here instead of silently. */
-  await new Promise((resolve) => setTimeout(resolve, 700));
-  return {
-    ok: true,
-    opened: target ? path.basename(target) : wanted,
-    where: target || null,
-    note: target ? undefined : "Launched through the Windows shell; if nothing appeared, that name is not registered on this machine.",
-  };
+  if (!raw) throw new Error("Which program? Give me a name like chrome or task manager, or a URL.");
+
+  const extra = Array.isArray(args.args) ? args.args.map(String) : [];
+  const target = resolveProgramTarget(raw) || binOnPath(raw) || binOnPath(raw.replace(/\.exe$/i, ""));
+  if (target) {
+    const exe = path.basename(target);
+    const before = await processNames();
+    launchDetached(target, extra);
+    const seen = await waitForAnyProcess([exe], 5000);
+    if (!seen) {
+      return { ok: false, error: `${exe} was started but no process appeared — it may be blocked or crashed.`, where: target };
+    }
+    const already = before.has(exe.toLowerCase());
+    return {
+      ok: true,
+      opened: exe,
+      where: target,
+      verified: already ? "already-running" : "process",
+      note: already ? `${exe} was already running; the request went to that instance.` : undefined,
+    };
+  }
+
+  /* Not in the map: let Windows resolve it through App Paths exactly once,
+     then insist that a matching process exists. */
+  if (IS_WIN) {
+    launchDetached("cmd", ["/c", "start", "", raw, ...extra]);
+    const keys = programCandidates(raw).map((name) => `${name}.exe`);
+    const seen = await waitForAnyProcess(keys, 4000);
+    if (seen) return { ok: true, opened: raw, verified: "process" };
+    return {
+      ok: false,
+      error: `Windows did not open anything called "${raw}". Try the full .exe path, or check the program name.`,
+    };
+  }
+
+  launchDetached(raw, extra);
+  const seen = await waitForAnyProcess([raw], 4000);
+  if (seen) return { ok: true, opened: raw, verified: "process" };
+  return { ok: false, error: `No process called "${raw}" appeared on this machine.` };
 }
 
 async function appStart(id) {
@@ -1082,7 +1203,7 @@ async function status() {
       audio: audioAvailable(),
       apps: APP_SPECS.map((spec) => spec.id),
     },
-    screen: lastFrame ? { width: lastFrame.width, height: lastFrame.height, at: lastFrame.at } : null,
+    screen: lastFrame ? { width: lastFrame.width, height: lastFrame.height, at: lastFrame.at, fps: measuredFps() } : null,
     log: redact(tailLog(10), [config.code, state.token]),
   };
 }
@@ -1187,6 +1308,7 @@ const server = http.createServer(async (req, res) => {
         windows: IS_WIN,
         input: hostAvailable() && config.allowInput,
         maxWidth: config.screenMaxWidth,
+        fps: measuredFps(),
         frame: lastFrame ? { width: lastFrame.width, height: lastFrame.height, at: lastFrame.at, screen: lastFrame.screen } : null,
       });
     }
@@ -1295,6 +1417,14 @@ const server = http.createServer(async (req, res) => {
           return send(200, { found: detectComfy(), config: { ...config } });
         case "apps":
           return send(200, { ok: true, apps: await appStates() });
+        case "processes": {
+          const [processes, comfy, ollama] = await Promise.all([topProcesses(), comfyStats(2000, 1500), ollamaInfo()]);
+          return send(200, {
+            ok: true,
+            ...processes,
+            services: { comfy: { ok: Boolean(comfy.ok) }, ollama: { ok: Boolean(ollama.ok) } },
+          });
+        }
         case "app-install":
           return send(200, await appInstall(String(args.app || "")));
         case "app-start":

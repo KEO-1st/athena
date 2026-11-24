@@ -197,7 +197,7 @@ function render() {
   const nodes = state.nodes || [];
   const online = nodes.filter((node) => node.online);
 
-  $("#hub-line").textContent = `HUB · ${String(state.hub.name).toUpperCase()} · ${state.hub.addresses?.[0] || "LAN"}`;
+  $("#hub-line").textContent = `HUB · ${String(state.hub.name).toUpperCase()} · v${state.hub.version} · ${state.hub.addresses?.[0] || "LAN"}`;
   const vram = online.reduce((sum, node) => sum + (node.status?.gpu?.vramGb || 0), 0);
   $("#orb-count").textContent = String(nodes.length).padStart(2, "0");
   $("#orb-online").textContent = String(online.length).padStart(2, "0");
@@ -228,6 +228,7 @@ function render() {
   renderNodes(nodes, state);
   renderScreens();
   renderJobs(state.jobs || []);
+  renderIntegrations(state.integrations || []);
   renderKeys(state.keys || []);
   renderConfig(state);
   renderSystem(state);
@@ -284,7 +285,7 @@ function renderNodes(nodes, state) {
           <button class="btn tiny solid" data-act="focus" data-id="${node.id}">⤢ FOCUS</button>
           <button class="btn tiny" data-act="refresh" data-id="${node.id}">STATUS</button>
           <button class="btn tiny" data-act="screen" data-id="${node.id}">SCREEN</button>
-          <button class="btn tiny" data-act="apps" data-id="${node.id}">APPS</button>
+          <button class="btn tiny" data-act="apps" data-id="${node.id}">SOFTWARE</button>
           <button class="btn tiny danger" data-act="unpair" data-id="${node.id}">UNLINK</button>
         </div>
       </article>`;
@@ -292,26 +293,69 @@ function renderNodes(nodes, state) {
     .join("");
 }
 
+const JOB_BADGE = { queued: "", running: "run", done: "ok", failed: "bad", cancelled: "bad", timeout: "bad" };
+
+function formatWhen(value) {
+  if (!value) return "—";
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? "—" : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatDuration(job) {
+  if (!job.startedAt) return job.state === "queued" ? "waiting" : "—";
+  const end = job.endedAt ? Date.parse(job.endedAt) : Date.now();
+  const seconds = Math.max(0, Math.round((end - Date.parse(job.startedAt)) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function jobDescription(job) {
+  const command = job.args?.command ? String(job.args.command).split("\n")[0] : "";
+  if (command) return command;
+  if (job.op === "app-install") return `install ${job.args?.app || "software"}`;
+  if (job.op === "app-start") return `start ${job.args?.app || "a service"}`;
+  if (job.op === "app-stop") return `stop ${job.args?.app || "a service"}`;
+  return job.label || job.op;
+}
+
+function jobFailure(job) {
+  if (!["failed", "timeout", "cancelled"].includes(job.state)) return "";
+  const reason = job.error || String(job.output || "").trim().split(/\r?\n/).filter(Boolean).pop() || (job.state === "cancelled" ? "Cancelled before it finished." : "No reason was reported.");
+  return String(reason).slice(0, 300);
+}
+
 function renderJobs(jobs) {
   const list = $("#job-list");
   if (!jobs.length) {
-    list.innerHTML = `<div class="empty"><p class="micro dim">QUEUE IS EMPTY</p><p class="micro dim" style="margin-top:8px">JOBS ARRIVE FROM THE AI OR THE API</p></div>`;
+    list.innerHTML = `<div class="empty"><p class="micro dim">QUEUE IS EMPTY</p><p class="micro dim" style="margin-top:8px">JOBS ARE TASKS ATHENA RUNS OR QUEUES ON A MACHINE. THEY ARRIVE FROM THE AI OR THE API.</p></div>`;
     return;
   }
+  const nodeName = (id) => (store.state?.nodes || []).find((node) => node.id === id)?.name || id;
   list.innerHTML = jobs
     .map((job) => {
-      const badge = { queued: "", running: "run", done: "ok", failed: "bad", cancelled: "bad", timeout: "bad" }[job.state] || "";
-      return `<article class="card bracket job">
+      const badge = JOB_BADGE[job.state] || "";
+      const failure = jobFailure(job);
+      const output = String(job.output || "").trim();
+      const source = job.source ? String(job.source).toUpperCase() : "API";
+      return `<article class="card bracket job" data-state="${esc(job.state)}">
         <div class="card-top">
           <div>
-            <h3 style="font-size:13px">${esc(job.label || job.op)}</h3>
-            <p class="micro dim">${esc(job.node)} · ${esc(job.op)} · ${new Date(job.createdAt).toLocaleTimeString()}</p>
+            <h3 style="font-size:13px">${esc(jobDescription(job))}</h3>
+            <p class="micro dim">${esc(nodeName(job.node))} · ${esc(job.op.toUpperCase())} · ${esc(source)}</p>
           </div>
           <span class="badge ${badge}">${esc(job.state)}</span>
         </div>
-        ${job.output ? `<p>${esc(job.output.slice(-1200))}</p>` : ""}
+        <div class="job-times">
+          <span class="micro dim">QUEUED ${esc(formatWhen(job.createdAt))}</span>
+          <span class="micro dim">STARTED ${esc(formatWhen(job.startedAt))}</span>
+          <span class="micro dim">ENDED ${esc(formatWhen(job.endedAt))}</span>
+          <span class="micro dim">TOOK ${esc(formatDuration(job))}</span>
+          ${job.code != null ? `<span class="micro dim">EXIT ${esc(job.code)}</span>` : ""}
+        </div>
+        ${failure ? `<p class="micro job-error">✕ ${esc(failure)}</p>` : ""}
+        ${output ? `<details class="job-output"><summary class="micro dim">OUTPUT (${output.length} CHARS)</summary><pre class="code">${esc(output.slice(-4000))}</pre></details>` : `<p class="micro dim">No output.</p>`}
         <div class="actions">
-          <button class="btn tiny ghost" data-job="${job.id}">DETAIL</button>
+          <button class="btn tiny ghost" data-job="${job.id}">SEND TO CHAT</button>
           ${["queued", "running"].includes(job.state) ? `<button class="btn tiny danger" data-cancel="${job.id}">CANCEL</button>` : ""}
         </div>
       </article>`;
@@ -377,6 +421,22 @@ function renderModelPicker(brain) {
 
 /* ─────────────────────────────────────────────────────────── chat */
 
+/** Screenshots come back as real images, not base64 text or JSON. */
+function addShots(wrap, images) {
+  if (!Array.isArray(images) || !images.length) return;
+  const box = document.createElement("div");
+  box.className = "msg-shots";
+  for (const shot of images.slice(0, 2)) {
+    if (!shot?.url) continue;
+    const img = document.createElement("img");
+    img.src = shot.url;
+    img.alt = shot.node ? `Screenshot of ${shot.node}` : "Screenshot";
+    img.loading = "lazy";
+    box.appendChild(img);
+  }
+  if (box.childElementCount) wrap.appendChild(box);
+}
+
 function addMessage(role, text, extra = {}) {
   if (!extra.restore) {
     store.chat.push({
@@ -408,6 +468,7 @@ function addMessage(role, text, extra = {}) {
     pre.textContent = extra.code;
     wrap.appendChild(pre);
   }
+  addShots(wrap, extra.images);
   $("#chat").appendChild(wrap);
   /* a long conversation is kept in storage, but the page only holds so much */
   const messages = $$("#chat .msg");
@@ -583,6 +644,7 @@ function liveMessage() {
         line.textContent = extra.tools.map((tool) => `${tool.ok ? "✓" : "✕"} ${tool.name}`).join("  ");
         wrap.appendChild(line);
       }
+      addShots(wrap, extra.images);
       store.chat.push({
         role: "athena",
         text: body,
@@ -657,7 +719,7 @@ async function submitAsk(text) {
 
     pending.remove();
     const reply = answer.reply || streamed || "…";
-    live.commit(reply, { tools: answer.actions || [] });
+    live.commit(reply, { tools: answer.actions || [], images: answer.images || [] });
     store.history.push({ role: "user", content: value }, { role: "assistant", content: reply });
     store.history = store.history.slice(-16);
     speak(reply);
@@ -769,7 +831,29 @@ async function connectStream() {
 /* ─────────────────────────────────────────────────────────── screens */
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const screens = { generation: 0 };
+/* fps is measured from frames this browser actually received and painted. */
+const screens = { generation: 0, fps: new Map() };
+
+function noteScreenFrame(id) {
+  const now = performance.now();
+  const stat = screens.fps.get(id) || { frames: 0, since: now, value: 0 };
+  stat.frames += 1;
+  const elapsed = now - stat.since;
+  if (elapsed >= 1200) {
+    stat.value = Math.round((stat.frames / (elapsed / 1000)) * 10) / 10;
+    stat.frames = 0;
+    stat.since = now;
+  }
+  screens.fps.set(id, stat);
+  if (elapsed >= 1200) {
+    const label = `${stat.value} FPS`;
+    for (const badge of document.querySelectorAll(`[data-fps="${CSS.escape(id)}"]`)) badge.textContent = label;
+    if (store.focus === id) {
+      const focusBadge = $("#focus-fps");
+      if (focusBadge) focusBadge.textContent = label;
+    }
+  }
+}
 
 function screenNodes() {
   return (store.state?.nodes || []).filter((node) => node.online);
@@ -786,6 +870,7 @@ function screenCard(node) {
       </div>
       <div class="head-actions">
         <span class="badge ${control ? "ok" : ""}">${control ? "CONTROL" : "VIEW ONLY"}</span>
+        <span class="badge" data-fps="${esc(node.id)}" title="Frames per second measured in this browser">—</span>
         <button class="btn tiny" data-focus="${esc(node.id)}">⤢ FOCUS</button>
       </div>
     </div>
@@ -811,7 +896,7 @@ function screenCard(node) {
         audio
           ? `<button class="btn tiny" data-listen="${esc(node.id)}">🔊 LISTEN</button>
              <button class="btn tiny ghost" data-listen-mute="${esc(node.id)}">MUTE</button>`
-          : `<span class="micro dim">SOUND OFF · INSTALL FFMPEG IN APPS</span>`
+          : `<span class="micro dim">SOUND OFF · INSTALL FFMPEG IN SOFTWARE</span>`
       }
     </div>
   </article>`;
@@ -861,22 +946,27 @@ async function screenLoop(id, generation) {
   let misses = 0;
   while (generation === screens.generation) {
     if ((store.view !== "screen" && store.focus !== id) || document.hidden) {
-      await sleep(800);
+      await sleep(700);
       misses = 0;
       continue;
     }
+    const started = Date.now();
     const ok = await grabScreen(id, generation);
     misses = ok ? 0 : misses + 1;
     /* a dead or blocking node must not turn into a request storm on a phone */
     if (misses >= 3) {
-      await sleep(6000);
+      await sleep(5000);
       misses = 0;
       continue;
     }
     const focused = store.focus === id;
-    /* one full-rate stream on a phone; the wall of previews can be slower */
+    /* A focused screen asks for the next frame as soon as the last one was
+       painted; previews get a slower budget so a wall of PCs does not saturate
+       the hub. The sleep only fills whatever is left of the budget. */
     const tight = window.innerWidth < 760 && !focused;
-    await sleep(focused ? 420 : tight ? 1400 : 650);
+    const budget = focused ? 60 : tight ? 900 : 400;
+    const spent = Date.now() - started;
+    await sleep(Math.max(0, budget - spent));
   }
 }
 
@@ -914,6 +1004,7 @@ async function grabScreen(id, generation) {
     previous.forEach((old) => { if (old !== url) URL.revokeObjectURL(old); });
     if (note) note.hidden = true;
     if (focusNote) focusNote.hidden = true;
+    noteScreenFrame(id);
     return true;
   } catch (error) {
     const message = String(error.message || error).slice(0, 140).toUpperCase();
@@ -942,6 +1033,7 @@ function focusNode(id) {
   $("#focus-meta").textContent = `NODE ${String(node.index || 0).padStart(2, "0")} · ${node.host}:${node.port}`;
   $("#focus-badge").textContent = node.online ? (caps.input ? "CONTROL" : "VIEW ONLY") : "OFFLINE";
   $("#focus-badge").className = "badge " + (node.online ? (caps.input ? "ok" : "") : "bad");
+  if ($("#focus-fps")) $("#focus-fps").textContent = "—";
   const img = $("#focus-img");
   img.dataset.img = id;
   img.alt = `Screen of ${node.name}`;
@@ -1075,10 +1167,10 @@ async function loadApps() {
   if (!grid) return;
   const nodes = (store.state?.nodes || []);
   if (!nodes.length) {
-    grid.innerHTML = `<div class="empty"><p class="micro dim">NO MACHINES LINKED</p><p class="micro dim" style="margin-top:8px">APPS INSTALL ON A NODE — START ONE, THEN NODES → SCAN</p></div>`;
+    grid.innerHTML = `<div class="empty"><p class="micro dim">NO MACHINES LINKED</p><p class="micro dim" style="margin-top:8px">SOFTWARE INSTALLS ON A NODE — START ONE, THEN NODES → SCAN</p></div>`;
     return;
   }
-  grid.innerHTML = `<p class="micro dim">READING APPS ON ${nodes.length} MACHINE${nodes.length === 1 ? "" : "S"}…</p>`;
+  grid.innerHTML = `<p class="micro dim">READING SOFTWARE ON ${nodes.length} MACHINE${nodes.length === 1 ? "" : "S"}…</p>`;
   try {
     if (!appsState.catalogue.length) appsState.catalogue = (await api("/api/apps")).apps || [];
   } catch (error) {
@@ -1155,21 +1247,66 @@ function renderApps() {
     .join("");
 }
 
-async function appAction(nodeId, appId, action) {
+async function appAction(nodeId, appId, action, button) {
   const key = `${nodeId}:${appId}`;
   appsState.busy.add(key);
+  if (button) {
+    button.setAttribute("aria-busy", "true");
+    button.disabled = true;
+  }
   renderApps();
   try {
-    await api(`/api/nodes/${encodeURIComponent(nodeId)}/action`, {
+    const res = await api(`/api/nodes/${encodeURIComponent(nodeId)}/action`, {
       method: "POST",
       body: { op: `app-${action}`, args: { app: appId }, timeout: action === "install" ? 900_000 : 240_000 },
     });
+    const result = res.result || {};
+    if (result.ok === false) throw new Error(result.error || result.note || "The machine refused that.");
     toast(`${appId.toUpperCase()} · ${action.toUpperCase()} DONE`, 3600);
   } catch (error) {
     toast(error.message, 6500);
   }
   appsState.busy.delete(key);
   await loadApps();
+}
+
+/* ─────────────────────────────────────────────────────── integrations */
+
+function renderIntegrations(items) {
+  const list = $("#integration-list");
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = `<div class="empty"><p class="micro dim">NO INTEGRATIONS REGISTERED</p><p class="micro dim" style="margin-top:8px">REGISTER AN APP'S API ABOVE TO SEE ITS STATUS AND CAPABILITIES HERE</p></div>`;
+    return;
+  }
+  list.innerHTML = items
+    .map((item) => {
+      const probe = item.lastProbe;
+      const badge = !item.url
+        ? `<span class="badge">NO ADDRESS</span>`
+        : !probe
+          ? `<span class="badge">NOT CHECKED</span>`
+          : probe.ok
+            ? `<span class="badge ok">CONNECTED · ${esc(probe.ms)}MS</span>`
+            : `<span class="badge bad">${esc(probe.error || "NO ANSWER")}</span>`;
+      return `<article class="card bracket job">
+        <div class="card-top">
+          <div>
+            <h3 style="font-size:13px">${esc(item.name)}</h3>
+            <p class="micro dim">${esc(String(item.kind).toUpperCase())}${item.url ? " · " + esc(item.url) : ""}${item.hasToken ? " · TOKEN STORED" : ""}</p>
+          </div>
+          ${badge}
+        </div>
+        ${item.description ? `<p class="micro dim">${esc(item.description)}</p>` : ""}
+        ${item.capabilities?.length ? `<p class="micro dim">CAPABILITIES · ${item.capabilities.map((cap) => esc(cap)).join(" · ")}</p>` : ""}
+        ${probe?.at ? `<p class="micro dim">CHECKED ${esc(new Date(probe.at).toLocaleTimeString())}</p>` : ""}
+        <div class="actions">
+          <button class="btn tiny solid" data-int-probe="${esc(item.id)}">CHECK</button>
+          <button class="btn tiny danger" data-int-remove="${esc(item.id)}">REMOVE</button>
+        </div>
+      </article>`;
+    })
+    .join("");
 }
 
 /* ─────────────────────────────────────────────────────────── system */
@@ -1549,7 +1686,67 @@ $("#apps-refresh").onclick = () => {
 $("#app-list").addEventListener("click", (event) => {
   const button = event.target.closest("[data-app]");
   if (!button) return;
-  void appAction(button.dataset.node, button.dataset.id, button.dataset.app);
+  void appAction(button.dataset.node, button.dataset.id, button.dataset.app, button);
+});
+
+$("#int-add").onclick = async (event) => {
+  const button = event.currentTarget;
+  const name = $("#int-name").value.trim();
+  if (!name) return toast("Give the integration a name.");
+  button.setAttribute("aria-busy", "true");
+  button.disabled = true;
+  try {
+    await api("/api/integrations", {
+      method: "POST",
+      body: {
+        name,
+        kind: $("#int-kind").value,
+        description: $("#int-desc").value.trim(),
+        url: $("#int-url").value.trim(),
+        token: $("#int-token").value,
+        capabilities: $("#int-caps").value,
+      },
+    });
+    for (const id of ["#int-name", "#int-desc", "#int-url", "#int-token", "#int-caps"]) $(id).value = "";
+    toast("Integration registered. Press CHECK to verify it answers.", 4200);
+    await loadState();
+  } catch (error) {
+    toast(error.message, 5200);
+  } finally {
+    button.removeAttribute("aria-busy");
+    button.disabled = false;
+  }
+};
+
+$("#integration-list").addEventListener("click", async (event) => {
+  const probe = event.target.closest("[data-int-probe]");
+  const remove = event.target.closest("[data-int-remove]");
+  if (probe) {
+    probe.setAttribute("aria-busy", "true");
+    probe.disabled = true;
+    try {
+      const res = await api(`/api/integrations/${encodeURIComponent(probe.dataset.intProbe)}/probe`, { method: "POST" });
+      const result = res.integration?.lastProbe;
+      if (result?.ok) toast(`Answered in ${result.ms} ms.`, 3600);
+      else toast(result?.error || "No answer.", 5200);
+      await loadState();
+    } catch (error) {
+      toast(error.message, 5200);
+    } finally {
+      probe.removeAttribute("aria-busy");
+    }
+    return;
+  }
+  if (remove) {
+    if (!confirm("Remove this integration? ATHENA forgets its address and token.")) return;
+    try {
+      await api(`/api/integrations/${encodeURIComponent(remove.dataset.intRemove)}`, { method: "DELETE" });
+      toast("Removed.");
+      await loadState();
+    } catch (error) {
+      toast(error.message, 5200);
+    }
+  }
 });
 
 $("#sys-nodes").addEventListener("click", async (event) => {

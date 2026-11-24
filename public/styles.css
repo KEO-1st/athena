@@ -1304,6 +1304,7 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bo
   align-items: center;
   justify-content: center;
   gap: 6px;
+  min-height: 40px;
   padding: 9px 13px;
   border: 1px solid var(--hair);
   border-radius: 2px;
@@ -1320,11 +1321,35 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bo
 .btn:active { transform: translateY(0); }
 .btn.solid { background: linear-gradient(180deg, var(--accent-l), var(--accent)); border-color: var(--accent); color: #08090e; font-weight: 600; }
 .btn.solid:hover { color: #08090e; box-shadow: 0 10px 30px -10px var(--glow-strong); }
-.btn.tiny { padding: 6px 9px; font-size: 8px; }
+.btn.tiny { min-height: 36px; padding: 8px 11px; font-size: 8px; }
 .btn.ghost { background: transparent; }
 .btn.danger { color: #ff9d89; border-color: rgba(255, 120, 90, 0.26); }
 .btn.danger:hover { color: #ffc9bc; border-color: rgba(255, 120, 90, 0.55); background: rgba(255, 90, 60, 0.12); }
+.btn:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 2px; }
 .btn:disabled { opacity: 0.4; pointer-events: none; }
+
+/* Every action shows that it is working, so a slow install never looks dead. */
+.btn[aria-busy="true"] { color: var(--accent-hi); pointer-events: none; }
+.btn[aria-busy="true"]::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border: 1px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: btnspin 0.7s linear infinite;
+}
+@keyframes btnspin { to { transform: rotate(360deg); } }
+
+.tabs button:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: -4px; }
+
+.msg-shots { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.msg-shots img { display: block; width: 100%; max-height: 320px; object-fit: contain; border: 1px solid var(--hair-3); background: #04050a; }
+
+.job-times { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.job-error { color: #ff9d89; letter-spacing: 0.08em; }
+.job-output > summary { cursor: pointer; padding: 4px 0; }
+.job-output > summary:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 2px; }
 
 .field { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .check { display: flex; align-items: flex-start; gap: 9px; padding: 6px 0; cursor: pointer; }
@@ -1541,6 +1566,7 @@ details[open] > summary::before { content: "[ \2212 ]  "; }
   flex-direction: column;
   align-items: center;
   gap: 3px;
+  min-height: 48px;
   padding: 8px 2px 6px;
   border: 0;
   background: none;

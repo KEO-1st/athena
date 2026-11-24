@@ -116,6 +116,18 @@ test("the hub cannot widen a node's permissions on its own", { timeout: 30_000 }
   assert.equal(viaPanel.json.config.allowShell, false);
 });
 
+test("the node reports what is actually running", { timeout: 30_000 }, async () => {
+  const res = await request(port, "/api/action", {
+    method: "POST",
+    headers: { "x-athena-token": "hubtok" },
+    body: { op: "processes", args: {} },
+  });
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray(res.json.processes), "a process list is returned");
+  assert.ok(res.json.total >= 1, "the machine has at least this process");
+  assert.ok(res.json.processes[0].name, "each process has a name");
+});
+
 test("a malformed or oversized body is rejected", async () => {
   const malformed = await request(port, "/api/link", { method: "POST", body: "{" });
   assert.equal(malformed.status, 400);

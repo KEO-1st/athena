@@ -301,7 +301,9 @@
       <div class="composer">
         <div class="quick" id="quick">
           <button data-quick="status">STATUS</button>
-          <button data-quick="what is running">RUNNING</button>
+          <button data-quick="what is running on this pc">RUNNING</button>
+          <button data-quick="what version are you">VERSION</button>
+          <button data-quick="what brain are you using">BRAIN</button>
           <button data-quick="install brain">INSTALL BRAIN</button>
           <button data-quick="upgrade brain">UPGRADE BRAIN</button>
         </div>
@@ -362,26 +364,45 @@
       <div class="view-head">
         <div>
           <p class="micro gold-line">THE ORACLE</p>
-          <h2>Executor</h2>
-          <p class="micro dim">queue · one job per machine at a time</p>
+          <h2>Jobs</h2>
+          <p class="micro dim">tasks ATHENA runs or queues · one at a time per machine</p>
         </div>
         <button class="btn" id="jobs-refresh">REFRESH</button>
       </div>
       <div id="job-list" class="cards"></div>
     </section>
 
-    <!-- APPS -->
+    <!-- SOFTWARE (view id stays "apps" so existing links keep working) -->
     <section class="view" data-view="apps" hidden>
       <div class="view-head">
         <div>
           <p class="micro gold-line">THE ARSENAL</p>
-          <h2>Apps</h2>
-          <p class="micro dim">install once on a machine · then it can do more</p>
+          <h2>Software</h2>
+          <p class="micro dim">programs installed on connected PCs · detect, install, start</p>
         </div>
         <button class="btn" id="apps-refresh">RESCAN</button>
       </div>
-      <p class="micro dim">APPS LIVE ON THE NODES, NOT ON THE HUB. INSTALL ONE ON A MACHINE AND IT CAN DO MORE.</p>
+      <p class="micro dim">SOFTWARE LIVES ON THE NODES, NOT ON THE HUB. INSTALL ONE ON A MACHINE AND IT CAN DO MORE.</p>
       <div id="app-list" class="apps"></div>
+
+      <div class="panel">
+        <p class="micro gold-line">INTEGRATIONS</p>
+        <p class="micro dim">APPS THAT TALK TO ATHENA THROUGH THEIR OWN API — SEPARATE FROM SOFTWARE INSTALLED ON A MACHINE. NOTHING IS ASSUMED: EACH ONE IS CHECKED WITH A REAL REQUEST.</p>
+        <div class="grid2">
+          <label class="field"><span class="micro dim">NAME</span><input id="int-name" placeholder="AI Clip Studio" /></label>
+          <label class="field"><span class="micro dim">KIND</span>
+            <select id="int-kind"><option value="app">APP</option><option value="api">API</option><option value="service">SERVICE</option></select>
+          </label>
+        </div>
+        <label class="field"><span class="micro dim">WHAT IT DOES</span><input id="int-desc" placeholder="Turns long streams into short clips" /></label>
+        <label class="field"><span class="micro dim">API ADDRESS</span><input id="int-url" placeholder="http://192.168.1.20:8080/api" /></label>
+        <label class="field"><span class="micro dim">TOKEN (OPTIONAL · STORED ON THIS HUB)</span><input id="int-token" type="password" autocomplete="off" placeholder="only if the app requires one" /></label>
+        <label class="field"><span class="micro dim">CAPABILITIES (COMMA SEPARATED)</span><input id="int-caps" placeholder="render, status, export" /></label>
+        <div class="actions">
+          <button class="btn solid" id="int-add">REGISTER INTEGRATION</button>
+        </div>
+        <div id="integration-list"></div>
+      </div>
     </section>
 
     <!-- SYSTEM -->
@@ -498,7 +519,7 @@
     <button data-tab="home" class="active"><i>◈</i><span>HOME</span></button>
     <button data-tab="screen"><i>▣</i><span>SCREEN</span></button>
     <button data-tab="nodes"><i>⬡</i><span>NODES</span></button>
-    <button data-tab="apps"><i>▦</i><span>APPS</span></button>
+    <button data-tab="apps"><i>▦</i><span>SOFTWARE</span></button>
     <button data-tab="jobs"><i>≣</i><span>JOBS</span></button>
     <button data-tab="system"><i>⚙</i><span>SYSTEM</span></button>
   </nav>
@@ -516,6 +537,7 @@
       </div>
       <div class="head-actions">
         <span class="badge" id="focus-badge">—</span>
+        <span class="badge" id="focus-fps" title="Frames per second measured in this browser">—</span>
         <button class="btn tiny" id="focus-listen">LISTEN</button>
         <button class="btn tiny" id="focus-mute">MUTE</button>
         <button class="btn tiny" data-close>CLOSE ✕</button>

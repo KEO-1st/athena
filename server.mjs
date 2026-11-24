@@ -25,6 +25,7 @@ import { Registry } from "./lib/nodes.mjs";
 import { Jobs } from "./lib/jobs.mjs";
 import { ask, probeBrain, warmBrain, invalidateProbeCache } from "./lib/brain.mjs";
 import { APPS } from "./lib/apps.mjs";
+import { Integrations } from "./lib/integrations.mjs";
 import { createBrainInstaller } from "./lib/brain-install.mjs";
 import { VERSION } from "./lib/version.mjs";
 import {
@@ -46,6 +47,7 @@ const KEYS_FILE = path.join(DATA, "keys.json");
 const SESSIONS_FILE = path.join(DATA, "sessions.json");
 const NODES_FILE = path.join(DATA, "nodes.json");
 const JOBS_FILE = path.join(DATA, "jobs.json");
+const INTEGRATIONS_FILE = path.join(DATA, "integrations.json");
 const CODE_FILE = path.join(DATA, "access-code.txt");
 const STARTED_AT = nowIso();
 /* A phone stays unlocked for a month, then asks for the code again. */
@@ -116,6 +118,7 @@ function prewarm() {
 }
 
 const registry = new Registry(NODES_FILE);
+const integrations = new Integrations(INTEGRATIONS_FILE);
 const jobs = new Jobs(JOBS_FILE, registry);
 /* A job that was running when the hub died is not running now. Queued work is
    picked back up, so a restart never silently drops the queue. */
@@ -295,6 +298,7 @@ async function hubState() {
     },
     nodes,
     jobs: jobs.list(20),
+    integrations: integrations.list(),
     keys: keys.map(({ id, label, prefix, createdAt, lastUsed }) => ({ id, label, prefix, createdAt, lastUsed })),
     sessions: sessions.size,
     sessionDays: SESSION_DAYS,
@@ -446,6 +450,56 @@ const server = http.createServer(async (req, res) => {
           locked: true,
         });
       }
+    }
+
+    /* ---- integrations: apps connected through their own API ---- */
+
+    if (route === "/api/integrations" && method === "GET") {
+      return json(res, 200, { integrations: integrations.list() });
+    }
+
+    if (route === "/api/integrations" && method === "POST") {
+      const body = await readBody(req);
+      try {
+        const integration = integrations.add(body);
+        broadcast("state", await hubState());
+        return json(res, 200, { ok: true, integration });
+      } catch (error) {
+        return json(res, 400, { error: String(error?.message || error) });
+      }
+    }
+
+    const integrationMatch = route.match(/^\/api\/integrations\/([^/]+)(\/probe)?$/);
+    if (integrationMatch) {
+      const id = decodeURIComponent(integrationMatch[1]);
+      if (integrationMatch[2] && method === "POST") {
+        try {
+          const integration = await integrations.probe(id);
+          broadcast("state", await hubState());
+          return json(res, 200, { ok: true, integration });
+        } catch (error) {
+          return json(res, 400, { error: String(error?.message || error) });
+        }
+      }
+      if (method === "POST") {
+        const body = await readBody(req);
+        try {
+          const integration = integrations.update(id, body);
+          if (!integration) return json(res, 404, { error: "No such integration." });
+          broadcast("state", await hubState());
+          return json(res, 200, { ok: true, integration });
+        } catch (error) {
+          return json(res, 400, { error: String(error?.message || error) });
+        }
+      }
+      if (method === "DELETE") {
+        if (!integrations.remove(id)) return json(res, 404, { error: "No such integration." });
+        broadcast("state", await hubState());
+        return json(res, 200, { ok: true });
+      }
+      const found = integrations.get(id);
+      if (!found) return json(res, 404, { error: "No such integration." });
+      return json(res, 200, { integration: integrations.view(found) });
     }
 
     if (route === "/api/stream-ticket" && method === "POST") {
@@ -708,7 +762,11 @@ const server = http.createServer(async (req, res) => {
         admin: brainInstaller,
         onToken,
       });
-      broadcast("chat", { at: nowIso(), text, ...answer });
+      /* Screenshots are for the client that asked; a base64 JPEG does not
+         belong in a broadcast every device receives. */
+      const { images: _images, ...broadcastable } = answer;
+      broadcast("chat", { at: nowIso(), text, ...broadcastable });
+      if (answer.meta) log(`ask ${answer.meta.ms}ms · ${answer.meta.path}${answer.meta.tools?.length ? " · " + answer.meta.tools.join(",") : ""}`);
       if (wantsStream) {
         if (!sentAny) {
           res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" });

@@ -147,3 +147,31 @@ test("the service worker is served with the current version and no placeholder",
   assert.ok(!res.text.includes("__ATHENA_VERSION__"));
   assert.ok(!res.text.includes("?v="));
 });
+
+test("/api/ask answers a version question from real state, with timing", async () => {
+  const res = await request(hub.port, "/api/ask", {
+    method: "POST",
+    headers: auth(),
+    body: { text: "what version are you", history: [] },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.json.meta.path, "identity:version");
+  assert.ok(res.json.reply.includes(`v${VERSION}`));
+  assert.deepEqual(res.json.images, []);
+  assert.ok(res.json.meta.ms < 1000);
+});
+
+test("the app shell exposes Software and Integrations wiring", async () => {
+  const page = await request(hub.port, "/");
+  assert.equal(page.status, 200);
+  assert.match(page.text, /<h2>Software<\/h2>/);
+  assert.match(page.text, /id="integration-list"/);
+  assert.match(page.text, /id="int-add"/);
+  assert.doesNotMatch(page.text, /<h2>Apps<\/h2>/);
+
+  const js = await request(hub.port, "/app.js");
+  assert.equal(js.status, 200);
+  assert.match(js.text, /function renderIntegrations/);
+  assert.match(js.text, /function addShots/);
+  assert.match(js.text, /noteScreenFrame/);
+});
