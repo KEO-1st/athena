@@ -219,10 +219,23 @@
   };
 
   let status = null;
+  let localToken = "";
+
+  /* The node mints a per-boot panel token. Ask for it with the explicit panel
+     intent header, then send it on every local call. */
+  async function localHeaders(extra = {}) {
+    if (!localToken) {
+      const res = await fetch("/api/local/bootstrap", { headers: { "x-athena-panel": "1" }, cache: "no-store" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "panel locked");
+      localToken = json.token;
+    }
+    return { "x-athena-local": localToken, ...extra };
+  }
 
   async function poll() {
     try {
-      const res = await fetch("/api/local/status", { cache: "no-store" });
+      const res = await fetch("/api/local/status", { cache: "no-store", headers: await localHeaders() });
       status = await res.json();
       render(status);
     } catch {
@@ -275,7 +288,7 @@
   }
 
   $("settings").onclick = async () => {
-    const full = await (await fetch("/api/local/status")).json();
+    const full = await (await fetch("/api/local/status", { headers: await localHeaders() })).json();
     $("f-name").value = full.name || "";
     $("f-comfy").value = full.services?.comfy?.dir || "";
     $("f-comfyport").value = full.services?.comfy?.port || 8188;
@@ -287,7 +300,7 @@
 
   $("close").onclick = () => $("drawer").classList.remove("open");
   $("recode").onclick = async () => {
-    const res = await (await fetch("/api/local/code", { method: "POST" })).json();
+    const res = await (await fetch("/api/local/code", { method: "POST", headers: await localHeaders() })).json();
     $("code").textContent = res.code;
     toast("new pairing code · " + res.code);
   };
@@ -295,7 +308,7 @@
     toast("searching for ComfyUI…");
     const res = await (await fetch("/api/action", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: await localHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ op: "detect" }),
     })).json();
     const found = res.found || [];
@@ -306,7 +319,7 @@
   $("save").onclick = async () => {
     await fetch("/api/local/config", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: await localHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({
         name: $("f-name").value,
         comfyDir: $("f-comfy").value,

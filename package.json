@@ -1,0 +1,17 @@
+{
+  "name": "athena",
+  "version": "2.3.0",
+  "private": true,
+  "type": "module",
+  "description": "ATHENA — a personal AI that coordinates the machines on your network.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "node": "node node/athena-node.mjs",
+    "check": "node tests/check.mjs",
+    "test": "node --test tests",
+    "smoke": "node tests/smoke.mjs"
+  }
+}

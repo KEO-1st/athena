@@ -1,6 +1,8 @@
-/* ATHENA app shell — cache the chrome, never the API, never the HTML. */
-const VERSION = "athena-v17";
-const SHELL = ["/styles.css?v=12", "/app.js?v=12", "/manifest.webmanifest", "/icons/icon-192.png"];
+/* ATHENA app shell — cache the chrome, never the API, never the HTML.
+   __ATHENA_VERSION__ is replaced by the hub from version.json, so the cache
+   key can never disagree with the assets index.html asks for. */
+const VERSION = "athena-__ATHENA_VERSION__";
+const SHELL = ["/styles.css", "/app.js", "/manifest.webmanifest", "/icons/icon-192.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(VERSION).then((cache) => cache.addAll(SHELL)).catch(() => undefined));
@@ -18,9 +20,8 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.pathname.startsWith("/api/") || url.pathname.startsWith("/v1/")) return;
 
-  /* The shell is never cached: a phone must get the current index.html and the
-     current ?v= assets after an update. Only the files that are versioned by
-     their query string are cached. */
+  /* The shell is never cached: a phone must get the current index.html after
+     an update. Only the versioned-by-cache-name assets are cached. */
   if (event.request.mode === "navigate") {
     event.respondWith(
       fetch(event.request).catch(
@@ -35,16 +36,18 @@ self.addEventListener("fetch", (event) => {
   }
 
   event.respondWith(
-    caches.match(event.request).then(
-      (hit) =>
-        hit ||
-        fetch(event.request)
-          .then((res) => {
+    caches.match(event.request).then((hit) => {
+      const network = fetch(event.request)
+        .then((res) => {
+          if (res.ok) {
             const copy = res.clone();
             caches.open(VERSION).then((cache) => cache.put(event.request, copy)).catch(() => undefined);
-            return res;
-          })
-          .catch(() => caches.match(event.request))
-    )
+          }
+          return res;
+        })
+        .catch(() => hit);
+      /* Serve instantly when we have it, refresh in the background. */
+      return hit || network;
+    })
   );
 });

@@ -18,13 +18,28 @@ import fs from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { VERSION } from "../lib/version.mjs";
+import { APP_SPECS } from "../lib/app-catalog.mjs";
+import {
+  HttpError,
+  applyCors,
+  corsHeadersFor,
+  hostAllowed,
+  isLoopback,
+  originAllowed,
+  readJsonBody,
+  redact,
+  safeEqual,
+} from "../lib/security.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const CONFIG_FILE = path.join(HERE, "config.json");
-const STATE_FILE = path.join(HERE, "state.json");
-const LOG_FILE = path.join(HERE, "node.log");
+/* Keeps the panel next to the agent, but lets a test or portable install keep
+   its identity and log somewhere writable and disposable. */
+const NODE_DIR = process.env.ATHENA_NODE_DIR ? path.resolve(process.env.ATHENA_NODE_DIR) : HERE;
+const CONFIG_FILE = path.join(NODE_DIR, "config.json");
+const STATE_FILE = path.join(NODE_DIR, "state.json");
+const LOG_FILE = path.join(NODE_DIR, "node.log");
 const PANEL_FILE = path.join(HERE, "panel.html");
-const VERSION = "2.2.0";
 const IS_WIN = process.platform === "win32";
 export const DISCOVERY_PORT = 48_880;
 
@@ -58,6 +73,7 @@ function writeJsonSync(file, value) {
   fs.renameSync(tmp, file);
 }
 
+fs.mkdirSync(NODE_DIR, { recursive: true });
 const config = { ...DEFAULTS, ...readJsonSync(CONFIG_FILE, {}) };
 if (!config.code) config.code = makeCode();
 writeJsonSync(CONFIG_FILE, config);
@@ -160,13 +176,17 @@ function lanAddresses() {
   return found.sort((a, b) => addressRank(a.address) - addressRank(b.address));
 }
 
-function isLoopback(req) {
-  const raw = req.socket.remoteAddress || "";
-  return raw === "127.0.0.1" || raw === "::1" || raw === "::ffff:127.0.0.1";
+/* Minted per boot, handed only to the local panel after an explicit intent
+   header. Loopback by itself no longer grants control: any local page can
+   reach 127.0.0.1, and so can a DNS-rebinding page. */
+const LOCAL_TOKEN = randomBytes(18).toString("hex");
+
+function localOk(req) {
+  return isLoopback(req) && safeEqual(req.headers["x-athena-local"], LOCAL_TOKEN);
 }
 
 function tokenOk(req) {
-  if (isLoopback(req)) return true;
+  if (localOk(req)) return true;
   const header = String(req.headers["x-athena-token"] || "");
   if (!state.token || !header) return false;
   const a = Buffer.from(header);
@@ -837,7 +857,7 @@ async function startAudio(req, res, requested) {
   res.writeHead(200, {
     "Content-Type": "audio/mpeg",
     "Cache-Control": "no-store",
-    "Access-Control-Allow-Origin": "*",
+    ...corsHeadersFor(req),
   });
   res.write(first);
   child.stdout.pipe(res);
@@ -862,16 +882,6 @@ async function startAudio(req, res, requested) {
 }
 
 /* ---- apps: what can be installed on this machine ------------------------- */
-
-const APP_SPECS = [
-  { id: "comfyui", name: "ComfyUI", winget: "", bin: "", service: true },
-  { id: "ollama", name: "Ollama", winget: "Ollama.Ollama", bin: "ollama", service: true },
-  { id: "ffmpeg", name: "FFmpeg", winget: "Gyan.FFmpeg", bin: "ffmpeg", service: false },
-  { id: "python", name: "Python", winget: "Python.Python.3.12", bin: "python", service: false },
-  { id: "git", name: "Git", winget: "Git.Git", bin: "git", service: false },
-  { id: "ytdlp", name: "yt-dlp", winget: "yt-dlp.yt-dlp", bin: "yt-dlp", service: false },
-  { id: "7zip", name: "7-Zip", winget: "7zip.7zip", bin: "7z", service: false },
-];
 
 async function appStates() {
   const [comfy, ollama] = await Promise.all([comfyStats(3000, 1500), ollamaInfo()]);
@@ -930,6 +940,77 @@ async function appInstall(id) {
     throw new Error(tail || "winget refused the install.");
   }
   return { ok: true, installed: true, note: "Restart the node agent so the new program is on its PATH." };
+}
+
+/**
+ * Open any program on this machine by name or path.
+ *
+ * The catalogue only covers things ATHENA installs itself; "open chrome" has
+ * to work for everything else. Windows resolves a bare name through App Paths
+ * (`start chrome`), so the common browsers get an explicit path first.
+ */
+const WIN_APPS = {
+  chrome: [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    "%LOCALAPPDATA%\\Google\\Chrome\\Application\\chrome.exe",
+  ],
+  edge: [
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+  ],
+  firefox: ["C:\\Program Files\\Mozilla Firefox\\firefox.exe", "C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe"],
+  notepad: ["C:\\Windows\\System32\\notepad.exe"],
+  explorer: ["C:\\Windows\\explorer.exe"],
+  calc: ["C:\\Windows\\System32\\calc.exe"],
+  calculator: ["C:\\Windows\\System32\\calc.exe"],
+  cmd: ["C:\\Windows\\System32\\cmd.exe"],
+  powershell: ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"],
+  taskmgr: ["C:\\Windows\\System32\\Taskmgr.exe"],
+};
+
+function resolveProgram(name) {
+  const raw = String(name || "").trim().replace(/^"|"$/g, "");
+  if (!raw) return null;
+  const expand = (p) => p.replace(/%([^%]+)%/g, (_, key) => process.env[key] || process.env[key.toUpperCase()] || "");
+  if (/[\\/]/.test(raw) && fs.existsSync(raw)) return raw;
+  if (fs.existsSync(raw)) return raw;
+  const base = path.basename(raw).replace(/\.exe$/i, "").toLowerCase();
+  const known = WIN_APPS[base] || [];
+  for (const candidate of known) {
+    const full = expand(candidate);
+    if (full && fs.existsSync(full)) return full;
+  }
+  const onPath = binOnPath(base) || binOnPath(`${base}.exe`);
+  if (onPath) return onPath;
+  return null;
+}
+
+async function openProgram(args = {}) {
+  const wanted = String(args.path || args.app || args.name || "").trim();
+  if (!wanted) throw new Error("Which program? Give me a name like chrome or a full path.");
+  const target = resolveProgram(wanted);
+  const extra = Array.isArray(args.args) ? args.args.map(String) : [];
+  const file = target || wanted;
+
+  if (IS_WIN) {
+    /* `start` is what turns a name, a path or a URL into a real window. It
+       returns immediately, so the node is not held open by the app. */
+    const child = spawn("cmd", ["/c", "start", "", file, ...extra], { detached: true, stdio: "ignore", windowsHide: true });
+    child.unref();
+  } else {
+    const child = spawn(file, extra, { detached: true, stdio: "ignore" });
+    child.unref();
+  }
+
+  /* Give it a moment so a bad name fails here instead of silently. */
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  return {
+    ok: true,
+    opened: target ? path.basename(target) : wanted,
+    where: target || null,
+    note: target ? undefined : "Launched through the Windows shell; if nothing appeared, that name is not registered on this machine.",
+  };
 }
 
 async function appStart(id) {
@@ -1002,7 +1083,7 @@ async function status() {
       apps: APP_SPECS.map((spec) => spec.id),
     },
     screen: lastFrame ? { width: lastFrame.width, height: lastFrame.height, at: lastFrame.at } : null,
-    log: tailLog(10),
+    log: redact(tailLog(10), [config.code, state.token]),
   };
 }
 
@@ -1017,22 +1098,18 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(statusCode, {
       "Content-Type": type,
       "Cache-Control": "no-store",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "content-type,x-athena-token",
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      ...corsHeadersFor(req),
     });
     res.end(payload);
   };
 
-  const body = async () => {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    try {
-      return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
-    } catch {
-      return {};
-    }
-  };
+  const body = () => readJsonBody(req, { limit: 512 * 1024 });
+
+  if (!hostAllowed(req)) return send(403, { error: "This node only answers to its own address." });
+  if (req.headers.origin && !originAllowed(req, req.headers.origin)) {
+    return send(403, { error: "That origin is not allowed." });
+  }
+  applyCors(req, res);
 
   if (req.method === "OPTIONS") return send(204, {});
   if (route === "/favicon.ico") return send(204, {});
@@ -1125,7 +1202,7 @@ const server = http.createServer(async (req, res) => {
           "Content-Type": "image/jpeg",
           "Content-Length": frame.buffer.length,
           "Cache-Control": "no-store",
-          "Access-Control-Allow-Origin": "*",
+          ...corsHeadersFor(req),
         });
         return res.end(frame.buffer);
       } catch (error) {
@@ -1224,6 +1301,10 @@ const server = http.createServer(async (req, res) => {
           return send(200, await appStart(String(args.app || "")));
         case "app-stop":
           return send(200, await appStop(String(args.app || "")));
+        case "open":
+        case "launch":
+        case "start-app":
+          return send(200, await openProgram(args));
         case "install-node":
           return send(200, await installCustomNode(args));
         case "pip": {
@@ -1243,6 +1324,14 @@ const server = http.createServer(async (req, res) => {
         case "open-panel":
           return send(200, { url: openWindow() });
         case "config": {
+          /* A hub may tune paths and display details, but it may not widen this
+             machine's permissions. That is a decision for the person at the
+             node's own panel. */
+          const protectedKeys = ["allowShell", "allowShutdown", "allowInput", "pairOpen", "code", "port"];
+          const attempted = protectedKeys.filter((key) => key in args && args[key] !== config[key]);
+          if (attempted.length && !localOk(req)) {
+            return send(403, { error: `Changing ${attempted.join(", ")} needs the node's own panel.` });
+          }
           for (const key of Object.keys(DEFAULTS)) {
             if (!(key in args)) continue;
             if (key === "port" || key === "comfyPort") {
@@ -1268,13 +1357,21 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    if (route === "/api/local/bootstrap" && req.method === "GET") {
+      if (!isLoopback(req)) return send(403, { error: "The panel is local to this machine." });
+      if (String(req.headers["x-athena-panel"] || "") !== "1") {
+        return send(403, { error: "This endpoint is for the node panel on this machine." });
+      }
+      return send(200, { ok: true, token: LOCAL_TOKEN });
+    }
+
     if (route === "/api/local/status") {
-      if (!isLoopback(req)) return send(403, { error: "Loopback only." });
+      if (!localOk(req)) return send(403, { error: "Local panel token required." });
       return send(200, await status());
     }
 
     if (route === "/api/local/config" && req.method === "POST") {
-      if (!isLoopback(req)) return send(403, { error: "Loopback only." });
+      if (!localOk(req)) return send(403, { error: "Local panel token required." });
       const patch = await body();
       for (const key of Object.keys(DEFAULTS)) {
         if (!(key in patch)) continue;
@@ -1290,7 +1387,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === "/api/local/code" && req.method === "POST") {
-      if (!isLoopback(req)) return send(403, { error: "Loopback only." });
+      if (!localOk(req)) return send(403, { error: "Local panel token required." });
       config.code = makeCode();
       writeJsonSync(CONFIG_FILE, config);
       return send(200, { ok: true, code: config.code });
@@ -1305,6 +1402,7 @@ const server = http.createServer(async (req, res) => {
 
     return send(404, { error: "Not found." });
   } catch (error) {
+    if (error instanceof HttpError) return send(error.status, { error: error.message });
     log("error " + (error?.stack || error?.message || error));
     return send(500, { error: error?.message || "Node error." });
   }
@@ -1330,7 +1428,7 @@ async function proxyComfy(req, res) {
       "Content-Type": upstream.headers.get("content-type") || "application/octet-stream",
       "Content-Length": buffer.length,
       "Cache-Control": "no-store",
-      "Access-Control-Allow-Origin": "*",
+      ...corsHeadersFor(req),
     });
     res.end(buffer);
   } catch (error) {
@@ -1421,7 +1519,9 @@ server.listen(config.port, "0.0.0.0", () => {
   console.log("  sound relay   " + (audioAvailable() ? "ready (ffmpeg found)" : "needs FFmpeg — APPS → FFmpeg → INSTALL"));
   console.log("  THIS WINDOW IS THE NODE — close it only when you want this PC offline.");
   console.log("");
-  log(`node up on ${config.port}, code ${config.code}`);
+  /* The pairing code is shown in this window on purpose; it is never logged,
+     because the hub receives the log tail in /api/status. */
+  log(`node up on ${config.port}`);
   udp.bind(DISCOVERY_PORT, () => {
     try {
       udp.setBroadcast(true);

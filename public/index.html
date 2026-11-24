@@ -12,7 +12,7 @@
 <link rel="manifest" href="/manifest.webmanifest" />
 <link rel="apple-touch-icon" href="/icons/icon-180.png" />
 <link rel="icon" href="/icons/icon-192.png" />
-<link rel="stylesheet" href="/styles.css?v=12" />
+<link rel="stylesheet" href="/styles.css" />
 <title>ATHENA</title>
 <style>
   /* boot: black before the stylesheet paints, so there is no white flash */
@@ -466,6 +466,7 @@
         <label class="field"><span class="micro dim">NAME</span><input id="cfg-name" /></label>
         <label class="field"><span class="micro dim">ACCESS CODE</span><input id="cfg-code" maxlength="12" /></label>
         <label class="check"><input type="checkbox" id="cfg-open" /><span class="micro">OPEN MODE — no code on the local network</span></label>
+        <p class="micro dim" id="cfg-local-note">SECURITY CHANGES ARE CONFIRMED WITH THE CURRENT CODE.</p>
         <button class="btn tiny" id="cfg-save-2">SAVE</button>
         <div class="kv" style="margin-top:14px"><span class="micro dim">DEVICES SIGNED IN</span><b id="sys-sessions">—</b></div>
         <p class="micro dim" id="sessions-note">A device stays unlocked for 30 days after its last use.</p>
@@ -581,6 +582,6 @@
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="/app.js?v=12" type="module"></script>
+<script src="/app.js" type="module"></script>
 </body>
 </html>

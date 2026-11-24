@@ -1749,5 +1749,12 @@ body[data-art="off"] .hero-grid { display: none; }
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
+  .spark,
+  .stars,
+  .nebula,
+  .glow-sweep,
+  .oc-dust,
+  .oc-flare { display: none !important; }
 }

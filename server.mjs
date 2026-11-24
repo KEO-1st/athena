@@ -23,12 +23,23 @@ import { readJson, writeJson, accessCode, sha256, randomToken, safeEqual, id as 
 import { discover, lanAddresses, DISCOVERY_PORT } from "./lib/discover.mjs";
 import { Registry } from "./lib/nodes.mjs";
 import { Jobs } from "./lib/jobs.mjs";
-import { ask, probeBrain, warmBrain } from "./lib/brain.mjs";
+import { ask, probeBrain, warmBrain, invalidateProbeCache } from "./lib/brain.mjs";
 import { APPS } from "./lib/apps.mjs";
 import { createBrainInstaller } from "./lib/brain-install.mjs";
+import { VERSION } from "./lib/version.mjs";
+import {
+  HttpError,
+  StreamTickets,
+  applyCors,
+  hostAllowed,
+  isLoopback,
+  originAllowed,
+  readJsonBody,
+} from "./lib/security.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DATA = path.join(HERE, "data");
+/* Tests and portable installs can point the hub at another state directory. */
+const DATA = process.env.ATHENA_DATA_DIR ? path.resolve(process.env.ATHENA_DATA_DIR) : path.join(HERE, "data");
 const PUBLIC = path.join(HERE, "public");
 const CONFIG_FILE = path.join(DATA, "config.json");
 const KEYS_FILE = path.join(DATA, "keys.json");
@@ -36,7 +47,6 @@ const SESSIONS_FILE = path.join(DATA, "sessions.json");
 const NODES_FILE = path.join(DATA, "nodes.json");
 const JOBS_FILE = path.join(DATA, "jobs.json");
 const CODE_FILE = path.join(DATA, "access-code.txt");
-const VERSION = "2.2.1";
 const STARTED_AT = nowIso();
 /* A phone stays unlocked for a month, then asks for the code again. */
 const SESSION_DAYS = 30;
@@ -61,6 +71,7 @@ const config = {
   brain: { ...DEFAULTS.brain, ...(savedConfig.brain || {}) },
 };
 if (!config.code) config.code = accessCode(6);
+if (process.env.PORT) config.port = Number(process.env.PORT) || config.port;
 if (!fs.existsSync(CONFIG_FILE)) writeJson(CONFIG_FILE, config);
 writeCodeFile();
 
@@ -87,6 +98,7 @@ const brainInstaller = createBrainInstaller({
   getBrain: () => config.brain,
   setBrain: (patch) => {
     Object.assign(config.brain, patch);
+    invalidateProbeCache();
     saveConfig();
     void hubState().then((state) => broadcast("state", state));
   },
@@ -105,6 +117,11 @@ function prewarm() {
 
 const registry = new Registry(NODES_FILE);
 const jobs = new Jobs(JOBS_FILE, registry);
+/* A job that was running when the hub died is not running now. Queued work is
+   picked back up, so a restart never silently drops the queue. */
+jobs.recover();
+const tickets = new StreamTickets();
+setInterval(() => tickets.prune(), 10 * 60 * 1000).unref?.();
 const keys = readJson(KEYS_FILE, { keys: [] }).keys || [];
 const sessions = new Map(Object.entries(readJson(SESSIONS_FILE, {})));
 
@@ -139,19 +156,19 @@ function log(...parts) {
 
 let failures = new Map();
 
-function presentedSecret(req, url) {
+/*
+ * Only headers carry long-lived credentials. Query strings end up in history,
+ * proxy logs and screenshots, so streaming transports use a scoped ticket
+ * instead — see /api/stream-ticket.
+ */
+function presentedSecret(req) {
   const bearer = String(req.headers.authorization || "").replace(/^bearer\s+/i, "").trim();
-  return (
-    String(req.headers["x-athena-key"] || "") ||
-    String(req.headers["x-athena-session"] || "") ||
-    String(url.searchParams.get("token") || "") ||
-    bearer
-  );
+  return String(req.headers["x-athena-key"] || "") || String(req.headers["x-athena-session"] || "") || bearer;
 }
 
-function authenticate(req, url) {
+function authenticate(req) {
   if (config.openMode) return { ok: true, via: "open" };
-  const secret = presentedSecret(req, url);
+  const secret = presentedSecret(req);
   if (!secret) return { ok: false };
   const hash = sha256(secret);
   const key = keys.find((item) => safeEqual(item.hash, hash));
@@ -174,13 +191,7 @@ function authenticate(req, url) {
     }
     return { ok: true, via: "session" };
   }
-  if (secret === config.code) return { ok: true, via: "code" };
   return { ok: false };
-}
-
-function isLoopback(req) {
-  const raw = req.socket.remoteAddress || "";
-  return raw === "127.0.0.1" || raw === "::1" || raw === "::ffff:127.0.0.1";
 }
 
 /* --------------------------------------------------------------- responses */
@@ -210,29 +221,33 @@ function json(res, status, body) {
   res.end(payload);
 }
 
-async function readBody(req) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > 2 * 1024 * 1024) throw new Error("Body too large.");
-    chunks.push(chunk);
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
-  } catch {
-    return {};
-  }
-}
+const readBody = (req) => readJsonBody(req, { limit: 512 * 1024 });
 
 function serveStatic(req, res, pathname) {
   const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-  const file = path.resolve(PUBLIC, rel);
-  if (!file.startsWith(path.resolve(PUBLIC))) return false;
+  const root = path.resolve(PUBLIC);
+  const file = path.resolve(root, rel);
+  const inside = path.relative(root, file);
+  if (!inside || inside.startsWith("..") || path.isAbsolute(inside)) return false;
   try {
     const stat = fs.statSync(file);
     if (!stat.isFile()) return false;
     const ext = path.extname(file).toLowerCase();
+
+    /* The service worker is a template: its cache key and shell list are
+       derived from the one version source, so it can never disagree with the
+       assets index.html asks for. */
+    if (rel === "sw.js") {
+      const body = fs.readFileSync(file, "utf8").replaceAll("__ATHENA_VERSION__", VERSION);
+      res.writeHead(200, {
+        "Content-Type": MIME[".js"],
+        "Content-Length": Buffer.byteLength(body),
+        "Cache-Control": "no-store",
+        "Service-Worker-Allowed": "/",
+      });
+      return res.end(body);
+    }
+
     res.writeHead(200, {
       "Content-Type": MIME[ext] || "application/octet-stream",
       "Content-Length": stat.size,
@@ -275,10 +290,8 @@ async function hubState() {
       port: config.port,
       addresses: lanAddresses().map((item) => item.address),
       openMode: config.openMode,
-      code: isOpen() ? null : config.code,
       pid: process.pid,
       startedAt: STARTED_AT,
-      dataDir: DATA,
     },
     nodes,
     jobs: jobs.list(20),
@@ -315,17 +328,18 @@ const server = http.createServer(async (req, res) => {
   const route = url.pathname;
   const method = req.method || "GET";
 
+  /* Fail closed before anything else: a request addressed to another host or
+     sent by a foreign page never reaches auth or a route. */
+  if (!hostAllowed(req)) return json(res, 403, { error: "This hub only answers to its own address." });
+  if (req.headers.origin && !originAllowed(req, req.headers.origin)) {
+    return json(res, 403, { error: "That origin is not allowed." });
+  }
+  applyCors(req, res);
+
   if (method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "content-type,authorization,x-athena-key,x-athena-session",
-      "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
-    });
+    res.writeHead(204, {});
     return res.end();
   }
-
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "content-type,authorization,x-athena-key,x-athena-session");
 
   try {
     /* ---- open endpoints ---- */
@@ -339,7 +353,7 @@ const server = http.createServer(async (req, res) => {
     /* Stopping and restarting from the app, so a black window is not the only
        way to control the thing. Only reachable with a session or the code. */
     if ((route === "/api/hub/shutdown" || route === "/api/hub/restart") && method === "POST") {
-      if (!authenticate(req, url).ok) return json(res, 401, { error: "Locked." });
+      if (!authenticate(req).ok) return json(res, 401, { error: "Locked." });
       const restart = route.endsWith("restart");
       json(res, 200, { ok: true, restarting: restart, stopping: !restart });
       log(restart ? "restart requested from the app" : "stop requested from the app");
@@ -358,6 +372,13 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "/api/lock" && method === "GET") {
       const local = isLoopback(req);
+      /* Loopback alone is not proof: a local web page could reach this port.
+         The app sends the explicit intent header, which a cross-origin page
+         cannot add without a preflight we refuse. */
+      if (String(req.headers["x-athena-local"] || "") !== "1") {
+        return json(res, local ? 403 : 200, local ? { error: "This endpoint is for the ATHENA app on this PC." } : { local: false, openMode: config.openMode, code: null, hubName: config.hubName, port: config.port });
+      }
+
       return json(res, 200, {
         local,
         openMode: config.openMode,
@@ -388,7 +409,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === "/api/events") {
-      if (!authenticate(req, url).ok) return json(res, 401, { error: "Locked." });
+      if (!authenticate(req).ok && !tickets.valid(url.searchParams.get("ticket"))) return json(res, 401, { error: "Locked." });
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-store",
@@ -415,12 +436,20 @@ const server = http.createServer(async (req, res) => {
     /* ---- the app itself ---- */
 
     if (route.startsWith("/api/") || route.startsWith("/v1/")) {
-      if (!authenticate(req, url).ok) {
+      /* Audio and SSE cannot send a header from the browser, so they may use a
+         scoped stream ticket instead of a session token. Nothing else can. */
+      const streamRoute = route === "/api/events" || /\/audio$/.test(route);
+      const ticketOk = streamRoute && tickets.valid(url.searchParams.get("ticket"));
+      if (!authenticate(req).ok && !ticketOk) {
         return json(res, 401, {
           error: "ATHENA is locked. Send x-athena-key, Authorization: Bearer <api key>, or unlock with the 6-character code.",
           locked: true,
         });
       }
+    }
+
+    if (route === "/api/stream-ticket" && method === "POST") {
+      return json(res, 200, { ok: true, ...tickets.issue("stream") });
     }
 
     if (route === "/api/state") return json(res, 200, await hubState());
@@ -571,7 +600,6 @@ const server = http.createServer(async (req, res) => {
           res.writeHead(200, {
             "Content-Type": upstream.headers.get("content-type") || "audio/mpeg",
             "Cache-Control": "no-store",
-            "Access-Control-Allow-Origin": "*",
           });
           const stream = Readable.fromWeb(upstream.body);
           req.on("close", () => {
@@ -641,7 +669,7 @@ const server = http.createServer(async (req, res) => {
       const job = jobs.get(decodeURIComponent(jobMatch[1]));
       if (!job) return json(res, 404, { error: "No such job." });
       if (jobMatch[2] && method === "POST") {
-        const ok = jobs.cancel(job.id);
+        const ok = await jobs.cancel(job.id);
         return json(res, ok ? 200 : 409, { ok, job });
       }
       return json(res, 200, { job });
@@ -651,14 +679,43 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const text = String(body.text || "").trim();
       if (!text) return json(res, 400, { error: "Ask me something." });
+      const wantsStream = Boolean(body.stream);
+      let sentAny = false;
+      const onToken = wantsStream
+        ? (piece) => {
+            if (res.writableEnded || res.destroyed) return;
+            if (!sentAny) {
+              /* Headers go out with the first token, so the phone can paint the
+                 bubble before the sentence is finished. */
+              sentAny = true;
+              res.writeHead(200, {
+                "content-type": "application/x-ndjson; charset=utf-8",
+                "cache-control": "no-store",
+                "x-accel-buffering": "no",
+              });
+            }
+            res.write(JSON.stringify({ type: "token", text: piece }) + "\n");
+          }
+        : null;
+
       const answer = await ask({
         text,
-        config: { ...config, ...(body.context || {}) },
+        /* Provider configuration is owned by the hub. A caller may ask a
+           question; it may not point the brain at another host. */
+        config,
         registry,
         history: body.history || [],
         admin: brainInstaller,
+        onToken,
       });
       broadcast("chat", { at: nowIso(), text, ...answer });
+      if (wantsStream) {
+        if (!sentAny) {
+          res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" });
+        }
+        res.end(JSON.stringify({ type: "done", ...answer }) + "\n");
+        return;
+      }
       return json(res, 200, answer);
     }
 
@@ -700,14 +757,57 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "/api/settings" && method === "POST") {
       const body = await readBody(req);
-      if (typeof body.hubName === "string" && body.hubName.trim()) config.hubName = body.hubName.trim().slice(0, 40);
-      if (typeof body.openMode === "boolean") config.openMode = body.openMode;
-      if (typeof body.code === "string" && body.code.trim().length >= 4) config.code = body.code.trim().toUpperCase().slice(0, 12);
-      if (body.brain && typeof body.brain === "object") {
-        for (const field of ["provider", "model", "baseUrl", "apiKey"]) {
-          if (field in body.brain) config.brain[field] = String(body.brain[field] ?? "").trim();
+      const nextCode = typeof body.code === "string" ? body.code.trim().toUpperCase() : "";
+      const wantsOpen = typeof body.openMode === "boolean" && body.openMode !== config.openMode;
+      const wantsCode = Boolean(nextCode) && nextCode !== String(config.code).toUpperCase();
+
+      /* Turning auth off, or rotating the code, is not something a borrowed
+         phone session may do. It needs the machine itself and the current
+         code as a fresh proof of ownership. */
+      if (wantsOpen || wantsCode) {
+        const confirmed = isLoopback(req) && String(body.confirmCode || "").trim().toUpperCase() === String(config.code).toUpperCase();
+        if (!confirmed) {
+          return json(res, 403, { error: "Open mode and code changes require this PC and the current access code." });
         }
       }
+
+      if (wantsCode) {
+        if (nextCode.length < 4 || nextCode.length > 12) return json(res, 400, { error: "The code must be 4–12 characters." });
+        config.code = nextCode;
+      }
+      if (typeof body.hubName === "string" && body.hubName.trim()) config.hubName = body.hubName.trim().slice(0, 40);
+      if (typeof body.openMode === "boolean") config.openMode = body.openMode;
+
+      if (body.brain !== undefined) {
+        if (!body.brain || typeof body.brain !== "object" || Array.isArray(body.brain)) {
+          return json(res, 400, { error: "brain must be an object." });
+        }
+        const provider = String(body.brain.provider ?? config.brain.provider).trim().toLowerCase();
+        if (!["auto", "ollama", "openai", "gemini", "off"].includes(provider)) {
+          return json(res, 400, { error: `Unknown provider "${provider}".` });
+        }
+        config.brain.provider = provider;
+        for (const field of ["model", "apiKey"]) {
+          if (field in body.brain) config.brain[field] = String(body.brain[field] ?? "").trim();
+        }
+        if ("baseUrl" in body.brain) {
+          const baseUrl = String(body.brain.baseUrl ?? "").trim();
+          if (baseUrl) {
+            let parsed;
+            try {
+              parsed = new URL(baseUrl);
+            } catch {
+              return json(res, 400, { error: "Base URL must be a full http(s) URL." });
+            }
+            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+              return json(res, 400, { error: "Base URL must be a full http(s) URL." });
+            }
+          }
+          config.brain.baseUrl = baseUrl;
+        }
+      }
+
+      invalidateProbeCache();
       saveConfig();
       broadcast("state", await hubState());
       prewarm();
@@ -763,6 +863,10 @@ const server = http.createServer(async (req, res) => {
 
     return json(res, 404, { error: "Not found." });
   } catch (error) {
+    if (error instanceof HttpError) {
+      if (!res.headersSent) return json(res, error.status, { error: error.message });
+      return res.end();
+    }
     log("error", error?.stack || error?.message || error);
     if (!res.headersSent) return json(res, 500, { error: String(error?.message || error) });
     res.end();
@@ -801,7 +905,9 @@ server.on("error", (error) => {
   console.error("Server error:", error);
 });
 
-server.listen(config.port, "0.0.0.0", () => {
+const LISTEN_PORT = Number(process.env.PORT) || config.port;
+
+server.listen(LISTEN_PORT, "0.0.0.0", () => {
   const addresses = lanAddresses().map((item) => item.address);
   const shown = addresses.length ? addresses : ["127.0.0.1"];
   console.log("");

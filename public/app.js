@@ -15,6 +15,7 @@ const store = {
     art: localStorage.getItem("athena.art") !== "0",
   },
   focus: null,
+  lockInfo: null,
   state: null,
   view: "home",
   history: [],
@@ -340,8 +341,17 @@ function renderKeys(keys) {
 function renderConfig(state) {
   if (document.activeElement?.closest(".panel")) return;
   $("#cfg-name").value = state.hub.name || "";
-  $("#cfg-code").value = state.hub.code || "";
+  const local = Boolean(store.lockInfo?.local);
+  $("#cfg-code").value = store.lockInfo?.code || "";
+  $("#cfg-code").disabled = !local;
   $("#cfg-open").checked = Boolean(state.hub.openMode);
+  $("#cfg-open").disabled = !local;
+  const localNote = $("#cfg-local-note");
+  if (localNote) {
+    localNote.textContent = local
+      ? "SECURITY CHANGES ARE CONFIRMED WITH THE CURRENT CODE."
+      : "OPEN MODE AND CODE CHANGES CAN ONLY BE MADE ON THE HUB PC.";
+  }
   const brain = state.brain || {};
   $("#cfg-provider").value = brain.provider || "auto";
   $("#cfg-model").value = brain.requested || "";
@@ -543,6 +553,50 @@ function speak(text) {
   }, 90);
 }
 
+/**
+ * A bubble that fills in while the model is still writing. It only reaches the
+ * saved chat once the answer is final, so a reload never shows half a sentence
+ * as if it were the reply.
+ */
+function liveMessage() {
+  const wrap = document.createElement("div");
+  wrap.className = "msg athena";
+  const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  wrap.innerHTML = `<span class="micro dim">ATHENA · ${stamp}</span>`;
+  const p = document.createElement("p");
+  p.textContent = "";
+  wrap.appendChild(p);
+  $("#chat").appendChild(wrap);
+  return {
+    wrap,
+    p,
+    show(text) {
+      p.textContent = text;
+      wrap.scrollIntoView({ block: "nearest" });
+    },
+    commit(text, extra = {}) {
+      const body = String(text || "…");
+      p.textContent = body;
+      if (extra.tools?.length) {
+        const line = document.createElement("span");
+        line.className = "tool";
+        line.textContent = extra.tools.map((tool) => `${tool.ok ? "✓" : "✕"} ${tool.name}`).join("  ");
+        wrap.appendChild(line);
+      }
+      store.chat.push({
+        role: "athena",
+        text: body,
+        tools: extra.tools?.map((tool) => ({ name: tool.name, ok: tool.ok })),
+        code: "",
+        at: Date.now(),
+      });
+      store.chat = store.chat.slice(-40);
+      saveChat();
+      wrap.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    },
+  };
+}
+
 async function submitAsk(text) {
   const value = String(text || "").trim();
   if (!value || store.busy) return;
@@ -550,19 +604,68 @@ async function submitAsk(text) {
   $("#ask").value = "";
   addMessage("me", value);
   const pending = thinking();
+  const live = liveMessage();
+  let streamed = "";
   try {
-    const answer = await api("/api/ask", {
+    const res = await fetch("/api/ask", {
       method: "POST",
-      body: { text: value, history: store.history.slice(-8) },
+      headers: {
+        "content-type": "application/json",
+        ...(store.token ? { "x-athena-session": store.token } : {}),
+      },
+      body: JSON.stringify({ text: value, history: store.history.slice(-8), stream: true }),
+      cache: "no-store",
     });
+    if (res.status === 401) {
+      lock();
+      throw new Error("Locked.");
+    }
+    if (!res.ok) throw new Error(`Hub said ${res.status}.`);
+
+    const type = res.headers.get("content-type") || "";
+    let answer = {};
+    if (res.body && type.includes("ndjson")) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value: chunk, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let event;
+          try {
+            event = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (event.type === "token") {
+            if (!streamed) pending.remove();
+            streamed += event.text;
+            live.show(streamed);
+          } else if (event.type === "done") {
+            answer = event;
+          }
+        }
+      }
+    } else {
+      answer = await res.json();
+    }
+
     pending.remove();
-    addMessage("athena", answer.reply || "…", { tools: answer.actions || [] });
-    store.history.push({ role: "user", content: value }, { role: "assistant", content: answer.reply || "" });
+    const reply = answer.reply || streamed || "…";
+    live.commit(reply, { tools: answer.actions || [] });
+    store.history.push({ role: "user", content: value }, { role: "assistant", content: reply });
     store.history = store.history.slice(-16);
-    speak(answer.reply || "");
+    speak(reply);
     loadState();
   } catch (error) {
     pending.remove();
+    if (streamed) live.commit(streamed);
+    else live.wrap.remove();
     addMessage("athena", String(error.message || error));
   } finally {
     store.busy = false;
@@ -623,23 +726,44 @@ function startListening() {
 
 /* ─────────────────────────────────────────────────────────── stream */
 
-function connectStream() {
+/* EventSource cannot send a header, so the hub issues a scoped, expiring
+   ticket. It is not the session token and cannot be used on other routes. */
+let streamTicket = { value: "", at: 0 };
+
+async function getStreamTicket() {
+  if (streamTicket.value && Date.now() - streamTicket.at < 60 * 60 * 1000) return streamTicket.value;
+  const issued = await api("/api/stream-ticket", { method: "POST" });
+  streamTicket = { value: issued.ticket, at: Date.now() };
+  return streamTicket.value;
+}
+
+async function connectStream() {
   store.stream?.close();
   if (!store.token) return;
-  const stream = new EventSource(`/api/events?token=${encodeURIComponent(store.token)}`);
-  store.stream = stream;
-  stream.addEventListener("state", (event) => {
-    try {
-      store.state = JSON.parse(event.data);
-      render();
-    } catch {
-      /* ignore */
-    }
-  });
-  stream.addEventListener("job", () => loadState());
-  stream.onerror = () => {
-    /* the browser retries on its own */
-  };
+  try {
+    const ticket = await getStreamTicket();
+    const stream = new EventSource(`/api/events?ticket=${encodeURIComponent(ticket)}`);
+    store.stream = stream;
+    stream.addEventListener("state", (event) => {
+      try {
+        store.state = JSON.parse(event.data);
+        render();
+      } catch {
+        /* ignore */
+      }
+    });
+    stream.addEventListener("job", () => loadState());
+    stream.onerror = () => {
+      /* A ticket can expire while the phone sleeps. Reconnect with a fresh one
+         instead of letting the browser retry a dead URL forever. */
+      stream.close();
+      if (store.stream !== stream) return;
+      store.stream = null;
+      setTimeout(() => void connectStream(), 2500);
+    };
+  } catch (error) {
+    if (!String(error.message).includes("Locked")) setTimeout(() => void connectStream(), 4000);
+  }
 }
 
 /* ─────────────────────────────────────────────────────────── screens */
@@ -671,12 +795,12 @@ function screenCard(node) {
       <button class="focus-hint" data-focus="${esc(node.id)}">⤢ FOCUS</button>
     </div>
     <div class="screen-bar">
-      <button class="btn tiny" data-k="enter" title="Enter">⏎</button>
-      <button class="btn tiny" data-k="tab">TAB</button>
-      <button class="btn tiny" data-k="esc">ESC</button>
-      <button class="btn tiny" data-k="backspace">⌫</button>
-      <button class="btn tiny" data-scroll="3" title="Scroll up">▲</button>
-      <button class="btn tiny" data-scroll="-3" title="Scroll down">▼</button>
+      <button class="btn tiny" data-k="enter" title="Enter" aria-label="Press Enter">⏎</button>
+      <button class="btn tiny" data-k="tab" aria-label="Press Tab">TAB</button>
+      <button class="btn tiny" data-k="esc" aria-label="Press Escape">ESC</button>
+      <button class="btn tiny" data-k="backspace" aria-label="Press Backspace">⌫</button>
+      <button class="btn tiny" data-scroll="3" title="Scroll up" aria-label="Scroll up">▲</button>
+      <button class="btn tiny" data-scroll="-3" title="Scroll down" aria-label="Scroll down">▼</button>
     </div>
     <form class="screen-type" data-form="${esc(node.id)}">
       <input data-text="${esc(node.id)}" placeholder="Type on that PC…" autocomplete="off" spellcheck="false" />
@@ -878,14 +1002,15 @@ async function screenAct(id, payload) {
 /** One <audio> per machine, fed by the hub's MP3 relay from that node. */
 const audioState = { streams: new Map(), muted: false };
 
-function audioElement(id) {
+async function audioElement(id) {
   const found = audioState.streams.get(id);
   if (found?.el) return found.el;
+  const ticket = await getStreamTicket();
   const el = document.createElement("audio");
   el.autoplay = true;
   el.preload = "none";
   el.muted = audioState.muted;
-  el.src = `/api/nodes/${encodeURIComponent(id)}/audio${store.token ? `?token=${encodeURIComponent(store.token)}` : ""}`;
+  el.src = `/api/nodes/${encodeURIComponent(id)}/audio?ticket=${encodeURIComponent(ticket)}`;
   el.addEventListener("error", () => toast("No sound from that PC — FFmpeg installed? Stereo Mix enabled in Windows sound settings?", 5600));
   audioState.streams.set(id, { el });
   return el;
@@ -905,7 +1030,7 @@ async function toggleListen(id, button) {
     return;
   }
   try {
-    const el = audioElement(id);
+    const el = await audioElement(id);
     await el.play();
     button.textContent = "STOP";
     button.classList.add("solid");
@@ -1055,7 +1180,7 @@ function renderSystem(state) {
   const hub = state?.hub || {};
   const addresses = [`http://127.0.0.1:${hub.port}`, ...(hub.addresses || []).map((address) => `http://${address}:${hub.port}`)];
   $("#sys-addresses").textContent = addresses.join("  ·  ");
-  $("#sys-code").textContent = hub.code || "OPEN MODE";
+  $("#sys-code").textContent = hub.openMode ? "OPEN MODE" : store.lockInfo?.code || "ON THIS PC ONLY";
   $("#sys-pid").textContent = hub.pid ? `PID ${hub.pid} · v${hub.version}` : "—";
   $("#sys-uptime").textContent = hub.startedAt ? `SINCE ${new Date(hub.startedAt).toLocaleTimeString()}` : "—";
   const sessions = $("#sys-sessions");
@@ -1594,6 +1719,7 @@ async function saveSettings(overrides = {}) {
   const body = {
     hubName: $("#cfg-name").value,
     code: $("#cfg-code").value,
+    confirmCode: store.lockInfo?.code || "",
     openMode: $("#cfg-open").checked,
     brain: {
       provider: $("#cfg-provider").value,
@@ -1651,7 +1777,8 @@ $("#lock-hint").textContent = "ENTER ACCESS CODE";
 /** On the machine that runs the hub there is nothing to type: it opens itself. */
 async function localUnlock() {
   try {
-    const info = await (await fetch("/api/lock", { cache: "no-store" })).json();
+    const info = await (await fetch("/api/lock", { headers: { "x-athena-local": "1" }, cache: "no-store" })).json();
+    store.lockInfo = info;
     if (!info.local) return false;
     if (info.code) {
       const line = $("#lock-local");
