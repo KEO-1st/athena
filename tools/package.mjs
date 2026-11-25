@@ -16,6 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../lib/version.mjs";
@@ -32,6 +33,8 @@ const CSC = [
 
 const NODE_FILES = [
   "athena-node.mjs",
+  "run-node.cmd",
+  "setup-runtime.cmd",
   "programs.mjs",
   "protocol.mjs",
   "version.mjs",
@@ -40,7 +43,7 @@ const NODE_FILES = [
   "host-screen.ps1",
   "host-input.ps1",
 ];
-const NODE_SHARED = ["lib/app-catalog.mjs", "lib/security.mjs"];
+const NODE_SHARED = ["lib/app-catalog.mjs", "lib/audio-sources.mjs", "lib/security.mjs"];
 const HUB_FILES = ["server.mjs", "version.json", "package.json", "Start Athena.cmd"];
 
 function fresh(dir) {
@@ -58,14 +61,55 @@ function write(file, text) {
   fs.writeFileSync(file, text.replace(/\n/g, "\r\n"), "utf8");
 }
 
+/* A build record makes an artifact auditable without making it non-reproducible:
+   it contains content hashes and versions, never a timestamp. */
+function writeBuildInfo(folder, fields) {
+  const files = {};
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      const rel = path.relative(folder, full).replace(/\\/g, "/");
+      if (rel === "BUILD-INFO.json") continue;
+      files[rel] = crypto.createHash("sha256").update(fs.readFileSync(full)).digest("hex");
+    }
+  };
+  walk(folder);
+  fs.writeFileSync(path.join(folder, "BUILD-INFO.json"), JSON.stringify({ ...fields, files }, null, 2) + "\n", "utf8");
+}
+
 function zip(folder, destination) {
   fs.rmSync(destination, { force: true });
-  const result = spawnSync(
-    "powershell",
-    ["-NoProfile", "-NonInteractive", "-Command", `Compress-Archive -Path '${folder.replace(/'/g, "''")}\\*' -DestinationPath '${destination.replace(/'/g, "''")}' -Force`],
-    { encoding: "utf8", timeout: 300_000 }
-  );
-  if (result.status !== 0) throw new Error(`Could not create ${path.basename(destination)}: ${result.stderr || result.stdout}`);
+  const source = `${folder.replace(/'/g, "''")}\\*`;
+  const target = destination.replace(/'/g, "''");
+  /* Compress-Archive can fail with a non-terminating error (commonly a
+     transient antivirus lock on runtime\\node.exe) while PowerShell still
+     exits 0. Verify the artifact instead of trusting the exit code. */
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    "for($i=0;$i -lt 3;$i++) {",
+    "  try {",
+    "    Compress-Archive -Path '" + source + "' -DestinationPath '" + target + "' -Force",
+    "    break",
+    "  } catch {",
+    "    if($i -eq 2) { Write-Error $_; exit 1 }",
+    "    Start-Sleep -Milliseconds 700",
+    "  }",
+    "}",
+    "if(!(Test-Path -LiteralPath '" + target + "')) { Write-Error 'archive was not created'; exit 2 }",
+    "$item=Get-Item -LiteralPath '" + target + "'",
+    "if($item.Length -le 0) { Write-Error 'archive is empty'; exit 3 }",
+  ].join("\n");
+  const result = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    encoding: "utf8",
+    timeout: 300_000,
+  });
+  if (result.status !== 0 || !fs.existsSync(destination) || fs.statSync(destination).size === 0) {
+    throw new Error(`Could not create ${path.basename(destination)}: ${result.stderr || result.stdout || "missing/empty archive"}`);
+  }
   return destination;
 }
 
@@ -107,31 +151,20 @@ rem Replacing this folder with a newer Node package keeps them.
 if "%ATHENA_NODE_DIR%"=="" set "ATHENA_NODE_DIR=%LOCALAPPDATA%\\ATHENA Node"
 if not exist "%ATHENA_NODE_DIR%" mkdir "%ATHENA_NODE_DIR%"
 
-cd /d "%~dp0node"
-node athena-node.mjs
+cd /d "%~dp0"
+call "%~dp0node\\run-node.cmd"
 if errorlevel 1 pause
 `
-  );
-
-  write(
+  );  write(
     path.join(folder, "Install Node.cmd"),
     `@echo off
 title ATHENA NODE SETUP
 cd /d "%~dp0"
 
-where node >nul 2>nul
+call "%~dp0node\\setup-runtime.cmd"
 if errorlevel 1 (
-  echo.
-  echo   Node.js 20 or newer is required. Installing the LTS build with winget...
-  echo.
-  winget install --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements
-  if errorlevel 1 (
-    echo.
-    echo   winget could not install Node.js.
-    echo   Install it from https://nodejs.org/ and run this file again.
-    pause
-    exit /b 1
-  )
+  pause
+  exit /b 1
 )
 
 echo.
@@ -155,12 +188,15 @@ call "%~dp0Start Node.cmd"
     `ATHENA NODE ${version}
 =================
 
-This is the standalone ATHENA Node. It is versioned separately from the Hub.
+This is the portable standalone ATHENA Node. It is NOT a Windows installer:
+keep this folder wherever you like. It is versioned separately from the Hub.
 Hub ${VERSION} speaks Node protocol ${NODE_PROTOCOL}; this Node understands Hub protocols ${MIN_HUB_PROTOCOL}-${MAX_HUB_PROTOCOL}.
+It needs Node.js 20+ (Install Node.cmd gets it) or an existing Node 20+ install.
 
 INSTALL ON A WINDOWS PC
   1. Copy this whole folder to that PC.
-  2. Run "Install Node.cmd" (installs Node.js if needed, then starts the node).
+  2. Run "Install Node.cmd" (installs Node.js 20+ if needed, then starts it).
+     The launcher also finds a just-installed Node whose PATH has not refreshed.
   3. Allow the Windows firewall prompt for PRIVATE networks.
   4. On the Hub: NODES -> SCAN -> LINK, and type the pairing code shown here.
   5. Start it again later with "Start Node.cmd".
@@ -183,6 +219,7 @@ WHY A NODE AND A HUB ARE SEPARATE
 `
   );
 
+  writeBuildInfo(folder, { component: "node", version, protocol: NODE_PROTOCOL, hubProtocol: { min: MIN_HUB_PROTOCOL, max: MAX_HUB_PROTOCOL } });
   const result = { folder, version, protocol: NODE_PROTOCOL, zip: null };
   if (shouldZip) result.zip = zip(folder, path.join(outDir, `ATHENA-Node-${version}-win64.zip`));
   return result;
@@ -233,10 +270,15 @@ if errorlevel 1 pause
 
 ATHENA Hub ${VERSION} · Node protocol ${NODE_PROTOCOL} (accepts ${NODE_PROTOCOL_MIN}-${NODE_PROTOCOL_MAX})
 
+PORTABLE, NOT AN INSTALLER
+  There is no installer, service, registry entry or uninstaller. Copy or move
+  this whole folder. Data lives in data\ and moves with it.
+
 START
   Double-click "ATHENA Hub.exe". That is the hub window; keep it open.
   If your antivirus dislikes a new unsigned .exe, "Start Athena.cmd" runs the
-  same server with the bundled runtime.
+  same server with the bundled runtime. The launcher waits for the health
+  endpoint before opening the browser, so a slow first start is not a dead page.
 
 WHAT IS IN THIS FOLDER
   ATHENA Hub.exe     launcher (no install, no registry changes)
@@ -254,6 +296,7 @@ NODES
 `
   );
 
+  writeBuildInfo(folder, { component: "hub", version: VERSION, nodeProtocol: NODE_PROTOCOL, acceptsNodeProtocol: { min: NODE_PROTOCOL_MIN, max: NODE_PROTOCOL_MAX } });
   const result = { folder, version: VERSION, exe, runtime, zip: null };
   if (shouldZip) result.zip = zip(folder, path.join(outDir, `ATHENA-Hub-${VERSION}-win64.zip`));
   return result;

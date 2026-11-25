@@ -367,7 +367,7 @@
       <div class="panel" id="job-explain">
         <p class="micro gold-line">WHAT A JOB IS</p>
         <p class="micro dim">ONE COMMAND, QUEUED FOR ONE MACHINE. THE HUB RUNS ONE JOB AT A TIME PER MACHINE AND KEEPS THE OUTPUT AFTER IT FINISHES.</p>
-        <p class="micro dim">JOBS ARRIVE FROM THE REST API (/v1 OR /api) OR FROM A BUTTON IN THIS APP. THE AI ANSWERS IN CHAT DIRECTLY AND DOES NOT QUEUE JOBS, SO NOTHING HERE IS A BACKGROUND “THOUGHT”.</p>
+        <p class="micro dim">JOBS ARRIVE FROM THE REST API (/v1 OR /api) OR FROM AN EXPLICIT APP ACTION. THE AI ANSWERS IN CHAT DIRECTLY AND DOES NOT QUEUE JOBS, SO NOTHING HERE IS A BACKGROUND “THOUGHT”.</p>
         <p class="micro dim">QUEUED → WAITING · RUNNING → ON THE MACHINE · DONE · FAILED · CANCELLED. EACH CARD SAYS WHO CREATED IT AND WHY.</p>
       </div>
       <div id="job-list" class="cards"></div>
@@ -478,8 +478,9 @@
         <label class="check"><input type="checkbox" id="cfg-open" /><span class="micro">OPEN MODE — no code on the local network</span></label>
         <p class="micro dim" id="cfg-local-note">SECURITY CHANGES ARE CONFIRMED WITH THE CURRENT CODE.</p>
         <button class="btn tiny" id="cfg-save-2">SAVE</button>
-        <div class="kv" style="margin-top:14px"><span class="micro dim">DEVICES SIGNED IN</span><b id="sys-sessions">—</b></div>
+        <div class="kv" style="margin-top:14px"><span class="micro dim">CONTROLLERS SIGNED IN</span><b id="sys-sessions">—</b></div>
         <p class="micro dim" id="sessions-note">A device stays unlocked for 30 days after its last use.</p>
+        <div id="sys-devices" class="app-rows" style="margin-top:10px"></div>
         <button class="btn tiny danger" id="sessions-clear">SIGN OUT EVERY DEVICE</button>
       </div>
 
@@ -543,9 +544,7 @@
       </div>
       <div class="head-actions">
         <span class="badge" id="focus-badge">—</span>
-        <span class="badge" id="focus-fps" title="Frames per second measured in this browser">—</span>
-        <button class="btn tiny" id="focus-listen">LISTEN</button>
-        <button class="btn tiny" id="focus-mute">MUTE</button>
+        <span class="badge" id="focus-fps" title="Frames per second and request latency measured in this browser">—</span>
         <button class="btn tiny" data-close>CLOSE ✕</button>
       </div>
     </header>
@@ -557,53 +556,88 @@
         <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
       </div>
       <aside class="focus-rail">
-        <div class="rail-block">
-          <p class="micro gold-line">KEYS</p>
+        <div id="focus-input-tools">
+          <details class="tool-group" open>
+            <summary>WINDOW MANAGEMENT</summary>
+            <div class="focus-keys">
+              <button class="btn tiny" data-k="alt+tab">ALT+TAB</button>
+              <button class="btn tiny" data-k="win">WIN</button>
+              <button class="btn tiny" data-k="ctrl+shift+esc">TASK MGR</button>
+              <button class="btn tiny" data-k="alt+f4">CLOSE WIN</button>
+            </div>
+          </details>
+          <details class="tool-group" open>
+            <summary>KEYBOARD</summary>
+            <div class="focus-keys">
+              <button class="btn tiny" data-k="enter">⏎ ENTER</button>
+              <button class="btn tiny" data-k="tab">TAB</button>
+              <button class="btn tiny" data-k="esc">ESC</button>
+              <button class="btn tiny" data-k="backspace">⌫ DEL</button>
+              <button class="btn tiny" data-k="space">SPACE</button>
+              <button class="btn tiny" data-k="up">↑</button>
+              <button class="btn tiny" data-k="down">↓</button>
+              <button class="btn tiny" data-k="left">←</button>
+              <button class="btn tiny" data-k="right">→</button>
+              <button class="btn tiny" data-k="ctrl+w">CTRL+W</button>
+              <button class="btn tiny" data-k="f11">F11</button>
+              <button class="btn tiny" data-k="printscreen">PRTSC</button>
+            </div>
+          </details>
+          <details class="tool-group">
+            <summary>MOUSE &amp; SCROLL</summary>
+            <div class="focus-keys">
+              <button class="btn tiny" data-scroll="5">▲ FAST</button>
+              <button class="btn tiny" data-scroll="2">▲</button>
+              <button class="btn tiny" data-scroll="-2">▼</button>
+              <button class="btn tiny" data-scroll="-5">▼ FAST</button>
+            </div>
+            <p class="micro dim">TAP THE PICTURE FOR A LEFT CLICK · LONG-PRESS/CONTEXT MENU ON THE PICTURE FOR A RIGHT CLICK.</p>
+          </details>
+          <details class="tool-group">
+            <summary>TYPE ON THAT PC</summary>
+            <form class="focus-type" id="focus-form">
+              <input id="focus-text" placeholder="Type here, press SEND…" autocomplete="off" spellcheck="false" />
+              <button class="btn tiny solid" type="submit">SEND</button>
+            </form>
+          </details>
+        </div>
+        <details class="tool-group" open id="focus-audio-tools">
+          <summary>AUDIO</summary>
           <div class="focus-keys">
-            <button class="btn tiny" data-k="enter">⏎ ENTER</button>
-            <button class="btn tiny" data-k="tab">TAB</button>
-            <button class="btn tiny" data-k="esc">ESC</button>
-            <button class="btn tiny" data-k="backspace">⌫ DEL</button>
-            <button class="btn tiny" data-k="space">SPACE</button>
-            <button class="btn tiny" data-k="win">WIN</button>
-            <button class="btn tiny" data-k="up">↑</button>
-            <button class="btn tiny" data-k="down">↓</button>
-            <button class="btn tiny" data-k="left">←</button>
-            <button class="btn tiny" data-k="right">→</button>
-            <button class="btn tiny" data-k="alt+tab">ALT+TAB</button>
-            <button class="btn tiny" data-k="ctrl+w">CTRL+W</button>
-            <button class="btn tiny" data-k="f11">F11</button>
-            <button class="btn tiny" data-k="printscreen">PRTSC</button>
+            <select class="audio-pick" id="focus-audio-source" aria-label="Audio source">
+              <option value="desktop">PC SOUND</option>
+              <option value="microphone">MICROPHONE</option>
+            </select>
+            <button class="btn tiny" id="focus-listen">LISTEN</button>
+            <button class="btn tiny" id="focus-mute">MUTE</button>
           </div>
-        </div>
-        <div class="rail-block">
-          <p class="micro gold-line">SCROLL</p>
+          <p class="micro dim">PC SOUND needs a loopback device on that machine. MICROPHONE and PC SOUND are never mixed.</p>
+        </details>
+        <details class="tool-group" open>
+          <summary>DISPLAY &amp; CAPTURE</summary>
           <div class="focus-keys">
-            <button class="btn tiny" data-scroll="5">▲ FAST</button>
-            <button class="btn tiny" data-scroll="2">▲</button>
-            <button class="btn tiny" data-scroll="-2">▼</button>
-            <button class="btn tiny" data-scroll="-5">▼ FAST</button>
+            <button class="btn tiny" id="focus-redraw">REDRAW</button>
+            <button class="btn tiny" id="focus-full">FULLSCREEN</button>
+            <button class="btn tiny" id="focus-shot">SCREENSHOT</button>
           </div>
-        </div>
-        <div class="rail-block">
-          <p class="micro gold-line">TYPE ON THAT PC</p>
-          <form class="focus-type" id="focus-form">
-            <input id="focus-text" placeholder="Type here, press SEND…" autocomplete="off" spellcheck="false" />
-            <button class="btn tiny solid" type="submit">SEND</button>
-          </form>
-        </div>
-        <div class="rail-block" id="focus-stats-block">
-          <p class="micro gold-line">THAT MACHINE</p>
+          <p class="micro dim">30 FPS while focused, 10–12 FPS in previews, stopped when nobody is watching. Measured FPS/latency is shown above.</p>
+        </details>
+        <details class="tool-group" open>
+          <summary>THIS NODE</summary>
           <div id="focus-stats"></div>
-        </div>
-        <div class="rail-block">
-          <p class="micro gold-line">SHORTCUTS</p>
+          <div class="focus-keys" style="margin-top:7px">
+            <button class="btn tiny" id="focus-status">STATUS</button>
+            <button class="btn tiny" id="focus-panel">NODE PANEL</button>
+          </div>
+        </details>
+        <details class="tool-group">
+          <summary>ASK ATHENA</summary>
           <div class="focus-keys">
             <button class="btn tiny" data-quick-focus="open task manager">TASK MANAGER</button>
             <button class="btn tiny" data-quick-focus="what windows are open">WINDOWS</button>
             <button class="btn tiny" data-quick-focus="describe this screen">READ SCREEN</button>
           </div>
-        </div>
+        </details>
       </aside>
     </div>
   </div>

@@ -171,6 +171,10 @@ test("software is per machine and Integrations live in System", async () => {
   assert.match(page.text, /id="int-add"/);
   assert.match(page.text, /id="voice-pick"/, "the voice controls are in System");
   assert.match(page.text, /SPOKEN VOICE/);
+  assert.match(page.text, /id="focus-audio-source"/, "audio source is explicit in the focus toolbar");
+  assert.match(page.text, /WINDOW MANAGEMENT/);
+  assert.match(page.text, /DISPLAY &amp; CAPTURE/);
+  assert.match(page.text, /id="sys-devices"/, "controllers are listed in System");
 
   const js = await request(hub.port, "/app.js");
   assert.equal(js.status, 200);
@@ -179,6 +183,8 @@ test("software is per machine and Integrations live in System", async () => {
   assert.match(js.text, /function renderIntegrations/);
   assert.match(js.text, /function addShots/);
   assert.doesNotMatch(js.text, /store\.mode|data-mode|loadApps/);
+  assert.doesNotMatch(js.text, /screen-grid"\)\.addEventListener\("contextmenu"/, "a thumbnail never sends a remote right-click");
+  assert.match(js.text, /focus"\)\.addEventListener\("contextmenu"/);
   const speech = await request(hub.port, "/speech.mjs");
   assert.equal(speech.status, 200);
   assert.match(speech.headers["content-type"], /text\/javascript/, "browsers refuse a module with the wrong MIME type");

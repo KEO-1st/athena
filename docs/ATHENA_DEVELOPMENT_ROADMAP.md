@@ -1,8 +1,8 @@
 # ATHENA — Development Roadmap
 
 **Companion to:** `docs/ATHENA_ARCHITECTURE_AUDIT.md`
-**Status:** Phase 0 and Phase 1 are implemented in v2.3.0 (delivery record in §21); Phase 2 onward is planned only.
-**Baseline:** branch `main` at `60663d9`, hub `2.2.2`, node `2.2.1`, zero npm dependencies, no tests, no CI.
+**Status:** Phase 0/1 foundations, ATHENA 3.0 packaging and the 2026-11-25 reliability/controller sprint are implemented. Phase 2 onward is still planned; see the latest delivery record at the end.
+**Baseline:** branch `main`, Hub 3.0.0, Node 0.1.0, zero runtime npm dependencies, 84 automated tests, no CI yet.
 
 ---
 
@@ -623,3 +623,48 @@ that were blocking daily use.
 followed by Phase 4's outbound channel. Packaging is a zip/folder today; a
 signed installer and signed Node package belong with Phase 7 (updates and
 rollback), not before.
+
+---
+
+## 22. Reliability, multi-PC and controller sprint (2026-11-25)
+
+**Scope:** fix installation/protocol/security gaps found in the audit, make
+controller identity and device sessions manageable, improve screen latency and
+touch accuracy, split microphone from desktop audio, and organize the focus
+toolbar. No architecture rewrite, no new runtime dependency.
+
+| Item | Outcome |
+| --- | --- |
+| Fresh Node install | `run-node.cmd` resolves Program Files/LOCALAPPDATA/winget before PATH and enforces Node 20+; installer starts through it. |
+| Portable vs installer | READMEs state portable explicitly; Hub launcher waits for `/api/health`; artifacts carry `BUILD-INFO.json` hashes. |
+| Protocol | Hub validates the Node's Hub range; all screen/audio/Comfy requests carry the Hub header; incompatible peers refused; legacy accepted. |
+| Pairing | Crypto-random 6-char code; 8 failures/minute per IP, one-minute lockout; paired nodes/tokens preserved. |
+| Software | Real result notes shown; PATH refreshed; detection forced after action; 20 s cache + forced summary open; ComfyUI labelled FIND FOLDER (detection only). |
+| Controllers | Per-device named sessions, independent conversations/settings, list and individual revoke, legacy sessions preserved. |
+| Screen | Demand-driven 30 fps focused / 10–12 preview, idle stop, measured FPS+latency; letterbox-aware coordinate mapping for iPad/touch. |
+| Audio | Explicit desktop/microphone source per node; no fallback/mixing; low-delay FFmpeg; separate controls on screen cards and focus. |
+| Toolbar | Focus rail grouped into Window, Keyboard, Mouse/Scroll, Type, Audio, Display/Capture, Node and Ask; input groups hidden when the node forbids input. |
+| Correctness/docs | Removed thumbnail right-click; fixed APPS/click/job/protocol docs; updated architecture, testing and installation docs. |
+
+**Automated verification:** 45/45 files parsed; 84/84 tests; smoke ok v3.0.0.
+
+**NOT YET VERIFIED (do not treat as done):** fresh PC without Node.js, winget
+install, second-PC firewall/Defender, Explorer double-click of the exe, real
+iPad touch alignment, measured FPS targets, audible audio quality, source
+separation on real hardware, and the >10 s latency observation. The next
+session must run these manual checks before claiming the hardware-facing goals.
+
+**Still prioritised:**
+
+1. Verify fresh-PC install and first launch on Windows; fix whatever the real
+   PATH/firewall/Defender behavior reveals.
+2. Authenticate the Hub protocol (current header is not a signature) and add
+   scoped node tokens / signed identity (Phase 2/4).
+3. Measure screen FPS and input latency on iPad + phone; tune capture policy
+   against actual numbers, not targets.
+4. Measure audio startup and long-run stability for both sources; consider Opus
+   or a lower-buffer transport if MP3/browser buffering is the remaining cause.
+5. Add an explicit device-session rename/current-device UI and stale-session
+   cleanup policy; currently names are auto-derived and can be revoked only.
+6. Signed installer/update path (Phase 7), which the portable `BUILD-INFO.json`
+   hashes make easier to verify.

@@ -1,5 +1,5 @@
 @echo off
 title ATHENA NODE
 cd /d "%~dp0"
-node athena-node.mjs
+call "%~dp0run-node.cmd"
 if errorlevel 1 pause

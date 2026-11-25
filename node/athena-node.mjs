@@ -17,10 +17,11 @@ import path from "node:path";
 import fs from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { NODE_VERSION } from "./version.mjs";
 import { MAX_HUB_PROTOCOL, MIN_HUB_PROTOCOL, NODE_FEATURES, NODE_PROTOCOL, helloInfo, hubProtocolSupported } from "./protocol.mjs";
 import { APP_SPECS } from "../lib/app-catalog.mjs";
+import { classifyAudioDevices, pickAudioDevice } from "../lib/audio-sources.mjs";
 import { asUrl, programCandidates, resolveProgramTarget } from "./programs.mjs";
 import {
   HttpError,
@@ -83,8 +84,29 @@ writeJsonSync(CONFIG_FILE, config);
 function makeCode() {
   const alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
   let out = "";
-  for (let i = 0; i < 6; i += 1) out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  for (let i = 0; i < 6; i += 1) out += alphabet[randomInt(alphabet.length)];
   return out;
+}
+
+/* Pairing is a low-entropy bootstrap secret by design (people read it aloud).
+   Limit guesses per source so the code cannot be brute-forced at LAN speed. */
+const LINK_WINDOW_MS = 60_000;
+const LINK_MAX_FAILURES = 8;
+const linkFailures = new Map();
+
+function linkAllowed(ip) {
+  const now = Date.now();
+  const entry = linkFailures.get(ip);
+  if (!entry || now - entry.at > LINK_WINDOW_MS) return { ok: true, remaining: LINK_MAX_FAILURES };
+  if (entry.count >= LINK_MAX_FAILURES) return { ok: false, retryAfter: Math.ceil((LINK_WINDOW_MS - (now - entry.at)) / 1000) };
+  return { ok: true, remaining: LINK_MAX_FAILURES - entry.count };
+}
+
+function noteLinkFailure(ip) {
+  const now = Date.now();
+  const entry = linkFailures.get(ip);
+  if (!entry || now - entry.at > LINK_WINDOW_MS) linkFailures.set(ip, { count: 1, at: now });
+  else entry.count += 1;
 }
 
 const state = {
@@ -556,6 +578,12 @@ let captureRunning = false;
 let captureInFlight = null;
 const frameStats = { frames: 0, since: Date.now(), fps: 0 };
 let lastCaptureAt = 0;
+/* Demand-driven capture. A focused controller asks for 30 fps; previews ask
+   for 10. There is no point capturing faster than the fastest viewer asked. */
+let screenTargetFps = 10;
+let screenDemandUntil = 0;
+let lastCaptureMs = 0;
+let captureWidth = Number(config.screenMaxWidth) || 1280;
 
 /** Measured, never assumed: frames actually captured per second. */
 function noteFrame() {
@@ -674,12 +702,14 @@ function hostCall(kind, op, args = {}, timeoutMs = 20_000) {
   });
 }
 
-async function captureFrame() {
+async function captureFrame(maxWidth = Number(config.screenMaxWidth) || 1280) {
+  const started = Date.now();
   const reply = await hostCall("screen", "capture", {
-    maxWidth: Number(config.screenMaxWidth) || 1280,
+    maxWidth: Math.max(320, Math.min(2560, Math.round(Number(maxWidth) || 1280))),
   });
   if (!reply.ok || !reply.path) throw new Error(reply.error || "The screen could not be captured.");
   const buffer = fs.readFileSync(String(reply.path));
+  lastCaptureMs = Date.now() - started;
   lastFrame = {
     buffer,
     at: Date.now(),
@@ -693,7 +723,7 @@ async function captureFrame() {
 
 function captureOnce() {
   if (!captureInFlight) {
-    captureInFlight = captureFrame().finally(() => {
+    captureInFlight = captureFrame(captureWidth).finally(() => {
       captureInFlight = null;
     });
   }
@@ -713,7 +743,9 @@ function startCaptureLoop() {
   captureRunning = true;
   (async () => {
     try {
-      while (Date.now() - lastScreenAt < 15_000) {
+      /* Stop shortly after the last viewer leaves; an unwatched PC should not
+         burn CPU taking pictures of itself. */
+      while (Date.now() < screenDemandUntil) {
         const started = Date.now();
         try {
           await captureOnce();
@@ -723,7 +755,8 @@ function startCaptureLoop() {
           continue;
         }
         const spent = Date.now() - started;
-        await new Promise((resolve) => setTimeout(resolve, Math.max(20, 70 - spent)));
+        const budget = 1000 / Math.max(1, Math.min(30, screenTargetFps));
+        await new Promise((resolve) => setTimeout(resolve, Math.max(5, budget - spent)));
       }
     } finally {
       captureRunning = false;
@@ -731,12 +764,17 @@ function startCaptureLoop() {
   })();
 }
 
-async function screenFrame() {
+async function screenFrame(requestedFps = 10, requestedWidth = 0) {
+  screenTargetFps = Math.max(1, Math.min(30, Number(requestedFps) || 10));
+  screenDemandUntil = Date.now() + 5000;
+  if (requestedWidth) captureWidth = Math.max(320, Math.min(2560, Number(requestedWidth) || captureWidth));
   lastScreenAt = Date.now();
   startCaptureLoop();
-  /* Serving the frame we already have beats waiting for a new one: at 10 fps
-     the freshest frame is at most 100 ms old. */
-  if (!lastFrame || Date.now() - lastFrame.at > 120) {
+  /* Serve the freshest frame if it fits this viewer's budget. The old fixed
+     120 ms threshold capped every client at ~8 fps regardless of its request. */
+  const target = Math.max(1, Math.min(30, screenTargetFps));
+  const maxAge = Math.max(15, Math.round(1000 / target) - 10);
+  if (!lastFrame || Date.now() - lastFrame.at > maxAge) {
     try {
       await captureOnce();
     } catch (error) {
@@ -844,12 +882,32 @@ let audioDeviceCache = { at: 0, list: [] };
 const audioChildren = new Set();
 let ollamaChild = null;
 
+/* winget updates the machine/user PATH, but this already-running process does
+   not see it. Reloading it after an install makes the new binary detectable
+   immediately instead of only after a node restart. */
+async function refreshProcessPath() {
+  if (!IS_WIN) return;
+  const result = await run(
+    "powershell",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "[Environment]::GetEnvironmentVariable('Path','Machine'); [Environment]::GetEnvironmentVariable('Path','User')",
+    ],
+    { timeout: 10_000 }
+  );
+  const fresh = result.out.split(/\r?\n/).filter(Boolean).join(";");
+  if (fresh) process.env.PATH = `${fresh};${process.env.PATH || ""}`;
+}
+
 function binOnPath(name) {
   const exe = IS_WIN && !/\.exe$/i.test(name) ? `${name}.exe` : name;
   const dirs = [
     ...String(process.env.PATH || "").split(path.delimiter),
     path.join(HERE, "tools"),
     IS_WIN ? path.join(process.env.LOCALAPPDATA || "", "Microsoft", "WinGet", "Links") : "",
+    IS_WIN ? path.join(process.env.ProgramFiles || "C:\\Program Files", "ffmpeg", "bin") : "",
   ].filter(Boolean);
   for (const dir of dirs) {
     try {
@@ -890,7 +948,7 @@ function audioAvailable() {
 async function audioDevices(force = false) {
   const ffmpeg = ffmpegPath();
   if (!ffmpeg) {
-    throw new Error("FFmpeg is not installed on this machine. Open APPS → FFmpeg → INSTALL, then restart the node agent.");
+    throw new Error("FFmpeg is not installed on this machine. Open NODES → this machine → SOFTWARE → FFmpeg → INSTALL.");
   }
   if (!force && audioDeviceCache.list.length && Date.now() - audioDeviceCache.at < 60_000) return audioDeviceCache.list;
   const result = await run(ffmpeg, ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], { timeout: 25_000 });
@@ -904,30 +962,55 @@ async function audioDevices(force = false) {
   return list;
 }
 
-/** The device that carries what the machine itself is playing, if there is one. */
-async function audioDevice() {
+/** The device for one explicit source. No silent microphone fallback. */
+async function audioDevice(source = "desktop") {
   const list = await audioDevices();
-  if (!list.length) {
-    throw new Error("No audio capture device found. Turn on Stereo Mix in Windows sound settings (Recording devices → right click → Show disabled devices) and try again.");
+  const inventory = classifyAudioDevices(list);
+  const device = pickAudioDevice(inventory, source);
+  if (device) return device;
+  if (source === "microphone") {
+    throw new Error("No microphone capture device was found. Check Windows Settings → Privacy → Microphone and the sound input device, then try again.");
   }
-  const ranks = [/stereo mix/i, /virtual-audio-capturer/i, /cable output/i, /what u hear/i, /loopback/i, /mix/i, /speakers/i];
-  for (const rank of ranks) {
-    const hit = list.find((name) => rank.test(name));
-    if (hit) return hit;
-  }
-  return list[0];
+  throw new Error("Desktop-audio capture is not available. Enable Stereo Mix (or install VB-CABLE) in Windows sound settings: Recording devices → right click → Show Disabled Devices. The microphone is a separate source and is not substituted.");
 }
 
 /** MP3 over HTTP, straight from FFmpeg. One listener, one FFmpeg process. */
-async function startAudio(req, res, requested) {
+async function startAudio(req, res, requested, source = "desktop") {
   const ffmpeg = ffmpegPath();
   if (!ffmpeg) {
-    throw new Error("FFmpeg is not installed on this machine. Open APPS → FFmpeg → INSTALL, then restart the node agent.");
+    throw new Error("FFmpeg is not installed on this machine. Open NODES → this machine → SOFTWARE → FFmpeg → INSTALL.");
   }
-  const device = String(requested || "").trim() || (await audioDevice());
+  const device = String(requested || "").trim() || (await audioDevice(source));
   const child = spawn(
     ffmpeg,
-    ["-hide_banner", "-loglevel", "error", "-f", "dshow", "-i", `audio=${device}`, "-ac", "2", "-ar", "44100", "-f", "mp3", "-"],
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-fflags",
+      "nobuffer",
+      "-flags",
+      "low_delay",
+      "-f",
+      "dshow",
+      "-audio_buffer_size",
+      "80",
+      "-i",
+      `audio=${device}`,
+      "-ac",
+      "2",
+      "-ar",
+      "48000",
+      "-c:a",
+      "libmp3lame",
+      "-b:a",
+      "96k",
+      "-flush_packets",
+      "1",
+      "-f",
+      "mp3",
+      "-",
+    ],
     { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
   );
   audioChildren.add(child);
@@ -988,7 +1071,7 @@ async function startAudio(req, res, requested) {
       /* closed */
     }
   });
-  log(`audio relay started: ${device}`);
+  log(`audio relay started: ${source} · ${device}`);
 }
 
 /* ---- apps: what can be installed on this machine ------------------------- */
@@ -1030,9 +1113,14 @@ async function appInstall(id) {
   if (spec.id === "comfyui") {
     const found = detectComfy();
     if (!found.length) {
-      throw new Error("No ComfyUI folder found on this machine. Unzip ComfyUI portable somewhere obvious (C:\\ComfyUI) and press FIND.");
+      throw new Error("No ComfyUI folder found. This is detection, not a download: unzip ComfyUI portable somewhere obvious (for example C:\\ComfyUI), then press FIND FOLDER again.");
     }
-    return { ok: true, found }; 
+    return {
+      ok: true,
+      found,
+      manual: true,
+      note: `Found ComfyUI at ${found[0].path}. Detection only — ATHENA did not download it.`,
+    };
   }
 
   const existing = binOnPath(spec.bin) || (spec.id === "ollama" ? findOllamaExe() : null);
@@ -1049,7 +1137,16 @@ async function appInstall(id) {
     const tail = `${result.err}\n${result.out}`.split(/\r?\n/).filter(Boolean).slice(-4).join(" ");
     throw new Error(tail || "winget refused the install.");
   }
-  return { ok: true, installed: true, note: "Restart the node agent so the new program is on its PATH." };
+  await refreshProcessPath();
+  const detected = binOnPath(spec.bin) || (spec.id === "ollama" ? findOllamaExe() : null);
+  return {
+    ok: true,
+    installed: true,
+    where: detected || null,
+    note: detected
+      ? `${spec.name} installed and detected at ${detected}.`
+      : `${spec.name} installed, but it is not on PATH yet. Restart the node agent.`,
+  };
 }
 
 /**
@@ -1177,6 +1274,7 @@ async function status() {
     version: NODE_VERSION,
     nodeVersion: NODE_VERSION,
     protocol: NODE_PROTOCOL,
+    hubProtocol: { min: MIN_HUB_PROTOCOL, max: MAX_HUB_PROTOCOL },
     features: [...NODE_FEATURES],
     hub: state.hub,
     state: state.token ? "linked" : "ready",
@@ -1207,7 +1305,9 @@ async function status() {
       audio: audioAvailable(),
       apps: APP_SPECS.map((spec) => spec.id),
     },
-    screen: lastFrame ? { width: lastFrame.width, height: lastFrame.height, at: lastFrame.at, fps: measuredFps() } : null,
+    screen: lastFrame
+      ? { width: lastFrame.width, height: lastFrame.height, at: lastFrame.at, fps: measuredFps(), targetFps: screenTargetFps, captureMs: lastCaptureMs }
+      : null,
     log: redact(tailLog(10), [config.code, state.token]),
   };
 }
@@ -1286,11 +1386,20 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === "/api/link" && req.method === "POST") {
+      const ip = req.socket.remoteAddress || "?";
+      const allowed = linkAllowed(ip);
+      if (!allowed.ok) {
+        log(`pairing blocked for ${ip}`);
+        return send(429, { error: `Too many pairing attempts. Try again in ${allowed.retryAfter}s.`, retryAfter: allowed.retryAfter });
+      }
       const payload = await body();
-      if (!config.pairOpen && String(payload.code || "").toUpperCase() !== config.code) {
+      const given = String(payload.code || "").trim().toUpperCase();
+      if (!config.pairOpen && !safeEqual(given, String(config.code).toUpperCase())) {
+        noteLinkFailure(ip);
         log("pairing refused: wrong code");
         return send(403, { error: "Wrong pairing code. Read the six characters in the node window." });
       }
+      linkFailures.delete(ip);
       if (state.token && state.hub && state.hub !== payload.hub) {
         return send(409, { error: `Already paired with ${state.hub}. Unpair it first.` });
       }
@@ -1326,6 +1435,8 @@ const server = http.createServer(async (req, res) => {
         input: hostAvailable() && config.allowInput,
         maxWidth: config.screenMaxWidth,
         fps: measuredFps(),
+        targetFps: screenTargetFps,
+        captureMs: lastCaptureMs,
         frame: lastFrame ? { width: lastFrame.width, height: lastFrame.height, at: lastFrame.at, screen: lastFrame.screen } : null,
       });
     }
@@ -1336,7 +1447,7 @@ const server = http.createServer(async (req, res) => {
       if (!tokenOk(req)) return send(403, { error: "Bad token." });
       if (!hostAvailable()) return send(400, { error: "Screen view needs Windows on this node." });
       try {
-        const frame = await screenFrame();
+        const frame = await screenFrame(url.searchParams.get("fps"), url.searchParams.get("width"));
         res.writeHead(200, {
           "Content-Type": "image/jpeg",
           "Content-Length": frame.buffer.length,
@@ -1365,13 +1476,22 @@ const server = http.createServer(async (req, res) => {
       if (!tokenOk(req)) return send(403, { error: "Bad token." });
       try {
         const devices = await audioDevices(true);
-        const systemAudio = devices.some((name) => /stereo mix|virtual-audio-capturer|cable output|what u hear|loopback|mix/i.test(name));
+        const inventory = classifyAudioDevices(devices);
         return send(200, {
           ok: true,
           ffmpeg: ffmpegPath(),
           devices,
-          default: devices.length ? await audioDevice() : null,
-          systemAudio,
+          sources: { microphone: inventory.microphone, desktop: inventory.desktop },
+          defaults: {
+            microphone: pickAudioDevice(inventory, "microphone"),
+            desktop: pickAudioDevice(inventory, "desktop"),
+          },
+          default: pickAudioDevice(inventory, "desktop"),
+          systemAudio: inventory.systemAudio,
+          microphoneAudio: inventory.microphoneAudio,
+          note: inventory.systemAudio
+            ? "Desktop audio is captured from a loopback device."
+            : "Desktop audio needs Stereo Mix, VB-CABLE or another loopback capture device.",
         });
       } catch (error) {
         return send(400, { error: String(error?.message || error) });
@@ -1380,8 +1500,10 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "/api/audio") {
       if (!tokenOk(req)) return send(403, { error: "Bad token." });
+      const source = url.searchParams.get("source") || "desktop";
+      if (!["microphone", "desktop"].includes(source)) return send(400, { error: "Audio source must be microphone or desktop." });
       try {
-        return await startAudio(req, res, url.searchParams.get("device"));
+        return await startAudio(req, res, url.searchParams.get("device"), source);
       } catch (error) {
         return send(400, { error: String(error?.message || error) });
       }
@@ -1666,7 +1788,7 @@ server.listen(config.port, "0.0.0.0", () => {
   console.log("  window        http://127.0.0.1:" + config.port + "/");
   console.log("  reachable at  " + (addresses.join(" · ") || "no LAN address") + ":" + config.port);
   console.log("  discovery     UDP " + DISCOVERY_PORT + "  ·  comfy " + config.comfyPort);
-  console.log("  sound relay   " + (audioAvailable() ? "ready (ffmpeg found)" : "needs FFmpeg — APPS → FFmpeg → INSTALL"));
+  console.log("  sound relay   " + (audioAvailable() ? "ready (ffmpeg found)" : "needs FFmpeg — NODES → SOFTWARE → FFmpeg"));
   console.log("  THIS WINDOW IS THE NODE — close it only when you want this PC offline.");
   console.log("");
   /* The pairing code is shown in this window on purpose; it is never logged,

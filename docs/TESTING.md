@@ -11,8 +11,8 @@ npm run package:node # standalone Node V0.1 folder + zip
 npm run package:hub  # Hub folder + ATHENA Hub.exe + zip
 ```
 
-All three must pass before a change is committed. There is no CI configuration
-yet; run them locally.
+All five commands must pass before a change is committed. There is no CI
+configuration yet; run them locally.
 
 ## What is automated
 
@@ -25,8 +25,12 @@ yet; run them locally.
 | `tests/hub.test.mjs` | Auth wall, access-code-as-credential rejection, token-in-URL rejection, state contains no code/data dir, Host/Origin policy, CORS, body limits, settings re-confirmation, local intent header, stream tickets, service-worker version substitution. |
 | `tests/node.test.mjs` | Node boots in a temp identity directory, loopback alone is insufficient, status requires a credential, log tail is redacted, a hub cannot widen node permissions, Host/body policy. |
 | `tests/smoke.mjs` | Boots the real hub, checks health/version, index, `sw.js`, 401/200 on `/api/state`. |
-| `tests/node-protocol.test.mjs` | Node has its own version; protocol ranges; legacy Nodes; pairing negotiation stores the Node version and refuses a future protocol. |
-| `tests/package.test.mjs` | Node package layout, identity outside program files, no auto-updater wording, Hub `ATHENA Hub.exe` compilation and shell. |
+| `tests/node-protocol.test.mjs` | Node has its own version; both protocol ranges; legacy Nodes; pairing negotiation stores the Node version and refuses a future/incompatible peer; `nodeFetch` sends the Hub protocol header on raw requests. |
+| `tests/sessions.test.mjs` | Device identity, independent controller sessions, same-browser replacement, individual revocation without signing out the hub. |
+| `tests/screen.test.mjs` | `object-fit: contain` letterboxing, iPad-like offset, portrait pillarboxing, CSS-pixel mapping, adaptive FPS profiles. |
+| `tests/audio.test.mjs` | Microphone and desktop/loopback devices are classified separately; no silent microphone fallback. |
+| `tests/software.test.mjs` | Result notes are surfaced, ComfyUI is labelled detection, PATH refresh and selected-node targeting are present. |
+| `tests/package.test.mjs` | Node package layout, `run-node.cmd` runtime/version resolution, identity outside program files, build manifest, no auto-updater wording, Hub `ATHENA Hub.exe` compilation and shell. |
 | `tests/speech.test.mjs` | Pronunciation normalisation, word-boundary chunking, voice ranking (Natural first, legacy last). |
 | `tests/hub.test.mjs` (shell) | No global Software tab, per-node software functions, Integrations and voice controls in SYSTEM. |
 
@@ -48,10 +52,17 @@ Tests never read or write the real `data/` or `node/config.json`.
 These depend on the host or a browser and are not automated:
 
 1. **Screen capture and input** — start the hub and a node on Windows, open
-   SCREEN, confirm frames update, click/type works, and FOCUS mode maps clicks
-   to the right coordinates on a second monitor.
-2. **Audio relay** — install FFmpeg on the node, enable Stereo Mix, press
-   LISTEN, confirm sound and that STOP ends the FFmpeg child.
+   SCREEN, confirm measured FPS/latency and that a focused screen asks for more
+   frames than a preview. Tap near the top, centre and bottom of a letterboxed
+   picture on iPad and a phone; verify each lands at the same point on the PC.
+   Check that capture stops after the last viewer leaves. **NOT YET VERIFIED on
+   real iPad/iPhone hardware after this change.**
+2. **Audio sources and latency** — install FFmpeg on the node, enable Stereo
+   Mix, choose PC SOUND and confirm you hear the PC; choose MICROPHONE and
+   confirm you hear the room. Confirm switching stops the first FFmpeg child and
+   never mixes the two. Measure startup-to-sound latency on the affected iPad;
+   the >10 s observation has **NOT YET been re-measured**. Also test a machine
+   with no loopback device: PC SOUND must error, not fall back to the mic.
 3. **ComfyUI tunnel** — start ComfyUI on the node, open its canvas through the
    hub. Request/response routes work; live WebSocket progress is known not to
    (see the audit, D-11).
@@ -66,10 +77,12 @@ These depend on the host or a browser and are not automated:
 7. **LAN access** — the hub answers only to its own hostnames and IPs. If the
    network uses an alias (for example `athena.home.arpa`), set
    `ATHENA_ALLOWED_HOSTS=athena.home.arpa` on the hub.
-8. **Node install on a second PC** — copy `dist/ATHENA-Node-0.1.0`, run
-   `Install Node.cmd`, allow the private-network firewall prompt, pair from the
-   Hub, restart the PC, and confirm the same node id is reused from
-   `%LOCALAPPDATA%\ATHENA Node`.
+8. **Node install on a second PC** — copy `dist/ATHENA-Node-0.1.0` to a PC with
+   **no Node.js**, run `Install Node.cmd`, allow the private-network firewall
+   prompt, pair from the Hub, restart the PC, and confirm the same node id is
+   reused from `%LOCALAPPDATA%\ATHENA Node`. This is **NOT YET VERIFIED**; the
+   code now resolves the standard install path instead of trusting the stale
+   cmd PATH.
 9. **Hub executable** — unzip `dist/ATHENA-Hub-3.0.0-win64.zip` to a writable
    folder, double-click `ATHENA Hub.exe`, confirm the browser opens, the access
    code is printed, and `data/` is created beside the exe. Check Defender's
@@ -80,7 +93,13 @@ These depend on the host or a browser and are not automated:
     difference.
 11. **Per-node software** — NODES → open SOFTWARE ON THIS MACHINE on node A,
     confirm it lists only A's software; install/start an app and confirm the
-    other node is unaffected.
+    other node is unaffected. Install a command-line tool and confirm the result
+    note says whether it was detected immediately or needs a restart. Press
+    ComfyUI's FIND FOLDER on a machine without it and confirm the label/error
+    says detection, not download. **NOT YET VERIFIED on real winget installs.**
+12. **Controller identities** — sign in from an iPhone and an iPad with
+    different names; SYSTEM → CONTROLLERS should list both, leave their chats
+    separate, and allow revoking one while the other stays signed in.
 
 ## Security checks worth repeating manually
 

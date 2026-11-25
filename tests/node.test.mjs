@@ -86,6 +86,7 @@ test("hello advertises the Node's own version and protocol", async () => {
   assert.equal(res.json.protocol, NODE_PROTOCOL);
   assert.equal(res.json.nodeVersion, NODE_VERSION);
   assert.ok(res.json.features.includes("status"));
+  assert.deepEqual(res.json.hubProtocol, { min: 1, max: 1 });
   assert.equal(res.headers["x-athena-node-protocol"], String(NODE_PROTOCOL));
 });
 
@@ -160,4 +161,14 @@ test("a malformed or oversized body is rejected", async () => {
 
   const big = await request(port, "/api/link", { method: "POST", body: JSON.stringify({ hub: "x".repeat(600 * 1024) }) });
   assert.equal(big.status, 413);
+});
+
+test("wrong pairing codes are rate limited instead of guessed forever", async () => {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const res = await request(port, "/api/link", { method: "POST", body: { hub: "athena", code: "XXXXXX" } });
+    assert.equal(res.status, 403, `attempt ${attempt + 1}`);
+  }
+  const blocked = await request(port, "/api/link", { method: "POST", body: { hub: "athena", code: "XXXXXX" } });
+  assert.equal(blocked.status, 429);
+  assert.match(blocked.json.error, /Too many pairing attempts/);
 });

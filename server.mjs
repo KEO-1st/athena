@@ -20,7 +20,7 @@ import { Readable } from "node:stream";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readJson, writeJson, accessCode, sha256, randomToken, safeEqual, id as newId, nowIso, clamp } from "./lib/store.mjs";
-import { discover, lanAddresses, DISCOVERY_PORT } from "./lib/discover.mjs";
+import { discover, lanAddresses, nodeFetch, DISCOVERY_PORT } from "./lib/discover.mjs";
 import { Registry } from "./lib/nodes.mjs";
 import { Jobs } from "./lib/jobs.mjs";
 import { ask, probeBrain, warmBrain, invalidateProbeCache } from "./lib/brain.mjs";
@@ -126,14 +126,42 @@ jobs.recover();
 const tickets = new StreamTickets();
 setInterval(() => tickets.prune(), 10 * 60 * 1000).unref?.();
 const keys = readJson(KEYS_FILE, { keys: [] }).keys || [];
-const sessions = new Map(Object.entries(readJson(SESSIONS_FILE, {})));
+/* Sessions historically stored only a timestamp string per token. Keep those
+   tokens valid but give them a visible identity instead of silently merging
+   every old phone into one bucket. No token is ever sent to a client list. */
+function normalizeSession(token, value) {
+  if (value && typeof value === "object") {
+    return {
+      id: value.id || `device_${sha256(token).slice(0, 8)}`,
+      name: String(value.name || "Earlier device").slice(0, 48),
+      platform: String(value.platform || "unknown").slice(0, 48),
+      clientId: value.clientId ? String(value.clientId).slice(0, 80) : null,
+      createdAt: value.createdAt || value.lastSeen || null,
+      lastSeen: value.lastSeen || value.createdAt || null,
+      legacy: Boolean(value.legacy),
+    };
+  }
+  return {
+    id: `device_${sha256(token).slice(0, 8)}`,
+    name: "Earlier device",
+    platform: "before device names were recorded",
+    clientId: null,
+    createdAt: value || null,
+    lastSeen: value || null,
+    legacy: true,
+  };
+}
+
+const sessions = new Map(
+  Object.entries(readJson(SESSIONS_FILE, {})).map(([token, value]) => [token, normalizeSession(token, value)])
+);
 
 /** Drops sessions that have not been used in SESSION_DAYS. */
 function pruneSessions() {
   const cutoff = Date.now() - SESSION_DAYS * 24 * 60 * 60 * 1000;
   let changed = false;
-  for (const [token, seen] of sessions) {
-    const at = Date.parse(seen);
+  for (const [token, session] of sessions) {
+    const at = Date.parse(session.lastSeen || session.createdAt);
     if (!Number.isFinite(at) || at < cutoff) {
       sessions.delete(token);
       changed = true;
@@ -149,6 +177,32 @@ function saveKeys() {
 }
 function saveSessions() {
   writeJson(SESSIONS_FILE, Object.fromEntries(sessions));
+}
+
+/** Public device list: metadata only. Never a token or a code. */
+function deviceList() {
+  return [...sessions.values()]
+    .map(({ id, name, platform, createdAt, lastSeen, legacy }) => ({ id, name, platform, createdAt, lastSeen, legacy: Boolean(legacy) }))
+    .sort((a, b) => String(b.lastSeen || "").localeCompare(String(a.lastSeen || "")));
+}
+
+function deviceLabel(req) {
+  const ua = String(req.headers["user-agent"] || "");
+  const platform = /iPad/i.test(ua)
+    ? "iPad"
+    : /iPhone/i.test(ua)
+      ? "iPhone"
+      : /Android/i.test(ua)
+        ? "Android"
+        : /Windows/i.test(ua)
+          ? "Windows"
+          : /Macintosh|Mac OS X/i.test(ua)
+            ? "macOS"
+            : /Linux/i.test(ua)
+              ? "Linux"
+              : "Unknown platform";
+  const browser = /Edg\//i.test(ua) ? "Edge" : /Chrome\//i.test(ua) ? "Chrome" : /Safari\//i.test(ua) ? "Safari" : /Firefox\//i.test(ua) ? "Firefox" : "Browser";
+  return `${platform} · ${browser}`;
 }
 
 function log(...parts) {
@@ -180,8 +234,9 @@ function authenticate(req) {
     saveKeys();
     return { ok: true, via: "key", key };
   }
-  if (sessions.has(secret)) {
-    const seen = Date.parse(sessions.get(secret));
+  const session = sessions.get(secret);
+  if (session) {
+    const seen = Date.parse(session.lastSeen || session.createdAt);
     if (!Number.isFinite(seen) || Date.now() - seen > SESSION_DAYS * 24 * 60 * 60 * 1000) {
       sessions.delete(secret);
       saveSessions();
@@ -189,10 +244,10 @@ function authenticate(req) {
     }
     /* cheap touch: only rewrite the file once an hour */
     if (Date.now() - seen > 60 * 60 * 1000) {
-      sessions.set(secret, nowIso());
+      session.lastSeen = nowIso();
       saveSessions();
     }
-    return { ok: true, via: "session" };
+    return { ok: true, via: "session", session };
   }
   return { ok: false };
 }
@@ -302,6 +357,7 @@ async function hubState() {
     integrations: integrations.list(),
     keys: keys.map(({ id, label, prefix, createdAt, lastUsed }) => ({ id, label, prefix, createdAt, lastUsed })),
     sessions: sessions.size,
+    devices: deviceList(),
     sessionDays: SESSION_DAYS,
     brain,
     platform: `${os.type()} ${os.release()}`,
@@ -403,11 +459,30 @@ const server = http.createServer(async (req, res) => {
       const fromThisPc = body.local === true && isLoopback(req);
       if (config.openMode || fromThisPc || given === String(config.code).toUpperCase()) {
         const token = randomToken(20);
-        sessions.set(token, nowIso());
+        const clientId = String(body.deviceId || "").trim().slice(0, 80) || null;
+        const name = String(body.deviceName || "").trim().slice(0, 48) || deviceLabel(req);
+        const platform = String(body.platform || req.headers["user-agent"] || "").slice(0, 160);
+        /* Signing in again on the same browser replaces that device's old
+           session; other phones, tablets and PCs keep theirs untouched. */
+        if (clientId) {
+          for (const [oldToken, oldSession] of sessions) {
+            if (oldSession.clientId && oldSession.clientId === clientId) sessions.delete(oldToken);
+          }
+        }
+        const session = {
+          id: newId("device"),
+          name,
+          platform: clientId ? platform : deviceLabel(req),
+          clientId,
+          createdAt: nowIso(),
+          lastSeen: nowIso(),
+          legacy: false,
+        };
+        sessions.set(token, session);
         saveSessions();
         failures.delete(ip);
-        log(`session opened from ${ip}`);
-        return json(res, 200, { ok: true, token });
+        log(`session opened from ${ip} (${name})`);
+        return json(res, 200, { ok: true, token, device: { ...session, platform: session.platform } });
       }
       failures.set(ip, { count: recent.count + 1, at: Date.now() });
       return json(res, 401, { error: "That code does not match. It is printed in the hub window." });
@@ -603,7 +678,10 @@ const server = http.createServer(async (req, res) => {
 
       if (rest === "/screen" && method === "GET") {
         try {
-          const buffer = await registry.screen(node.id);
+          const buffer = await registry.screen(node.id, {
+            fps: url.searchParams.get("fps"),
+            width: url.searchParams.get("width"),
+          });
           res.writeHead(200, {
             "Content-Type": "image/jpeg",
             "Content-Length": buffer.length,
@@ -637,14 +715,13 @@ const server = http.createServer(async (req, res) => {
 
       if (rest === "/audio" && method === "GET") {
         const device = url.searchParams.get("device") || "";
+        const source = url.searchParams.get("source") || "desktop";
+        if (!["microphone", "desktop"].includes(source)) return json(res, 400, { error: "Audio source must be microphone or desktop." });
         try {
-          const upstream = await fetch(
-            `http://${node.host}:${node.port}/api/audio${device ? `?device=${encodeURIComponent(device)}` : ""}`,
-            {
-              headers: { "x-athena-token": node.token || "" },
-              signal: AbortSignal.timeout(6 * 60 * 60 * 1000),
-            }
-          );
+          registry.assertCompatible(node);
+          const query = new URLSearchParams({ source });
+          if (device) query.set("device", device);
+          const upstream = await nodeFetch(node, `/api/audio?${query}`, {}, 6 * 60 * 60 * 1000);
           if (!upstream.ok || !upstream.body) {
             const text = await upstream.text().catch(() => "");
             let message = `Audio HTTP ${upstream.status}`;
@@ -657,7 +734,8 @@ const server = http.createServer(async (req, res) => {
           }
           res.writeHead(200, {
             "Content-Type": upstream.headers.get("content-type") || "audio/mpeg",
-            "Cache-Control": "no-store",
+            "Cache-Control": "no-store, no-transform",
+            "X-Accel-Buffering": "no",
           });
           const stream = Readable.fromWeb(upstream.body);
           req.on("close", () => {
@@ -684,12 +762,17 @@ const server = http.createServer(async (req, res) => {
       if (rest.startsWith("/comfy") && ["GET", "POST"].includes(method)) {
         const target = route.replace(/^\/(?:api|v1)\/nodes\/[^/]+/, "");
         const body = ["POST", "PUT", "PATCH"].includes(method) ? Buffer.from(await collect(req)) : undefined;
-        const upstream = await fetch(`http://${node.host}:${node.port}${target}${url.search}`, {
-          method,
-          headers: { "x-athena-token": node.token, ...(req.headers["content-type"] ? { "content-type": String(req.headers["content-type"]) } : {}) },
-          body,
-          signal: AbortSignal.timeout(600_000),
-        });
+        registry.assertCompatible(node);
+        const upstream = await nodeFetch(
+          node,
+          `${target}${url.search}`,
+          {
+            method,
+            headers: req.headers["content-type"] ? { "content-type": String(req.headers["content-type"]) } : {},
+            body,
+          },
+          600_000
+        );
         const buffer = Buffer.from(await upstream.arrayBuffer());
         res.writeHead(upstream.status, {
           "Content-Type": upstream.headers.get("content-type") || "application/octet-stream",
@@ -817,6 +900,20 @@ const server = http.createServer(async (req, res) => {
       keys.push(...filtered);
       saveKeys();
       return json(res, 200, { ok: true });
+    }
+
+    if (route === "/api/sessions" && method === "GET") {
+      return json(res, 200, { ok: true, devices: deviceList(), sessionDays: SESSION_DAYS });
+    }
+
+    if (route.startsWith("/api/sessions/") && method === "DELETE") {
+      const id = decodeURIComponent(route.slice("/api/sessions/".length));
+      const found = [...sessions.entries()].find(([, session]) => session.id === id);
+      if (!found) return json(res, 404, { error: "No such device session." });
+      sessions.delete(found[0]);
+      saveSessions();
+      log(`device session revoked: ${found[1].name}`);
+      return json(res, 200, { ok: true, id });
     }
 
     if (route === "/api/sessions" && method === "DELETE") {

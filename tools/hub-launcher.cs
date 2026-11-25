@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Threading;
 
 /*
@@ -23,9 +24,14 @@ internal static class Program
 
         if (!File.Exists(server))
         {
-            Console.Error.WriteLine("server.mjs is missing next to this executable.");
-            Console.Error.WriteLine("Extract the whole ATHENA Hub folder, not just the .exe.");
+            Fail("server.mjs is missing next to this executable.\nExtract the whole ATHENA Hub folder, not just the .exe.");
             return 2;
+        }
+
+        if (!File.Exists(runtime))
+        {
+            Console.Error.WriteLine("Bundled runtime not found: " + runtime);
+            Console.Error.WriteLine("Falling back to a Node.js 20+ installation on PATH.");
         }
 
         var start = new ProcessStartInfo
@@ -43,8 +49,9 @@ internal static class Program
         }
         catch (Exception error)
         {
-            Console.Error.WriteLine("Could not start the bundled Node runtime: " + error.Message);
-            Console.Error.WriteLine("Expected: " + runtime);
+            Fail("Could not start the ATHENA Hub runtime: " + error.Message +
+                 "\nExpected: " + runtime +
+                 "\nInstall Node.js 20+ or use the full package with runtime\\node.exe.");
             return 3;
         }
 
@@ -66,17 +73,42 @@ internal static class Program
             }
         }
 
-        /* The hub prints its address and code before this opens. */
+        /* Wait for the real health endpoint instead of guessing at a delay.
+           A first start on a slow disk can take longer than three seconds;
+           opening early leaves the user staring at a connection error. */
         var opener = new Thread(delegate()
         {
-            Thread.Sleep(3000);
-            try
+            string health = "http://127.0.0.1:" + port + "/api/health";
+            bool ready = false;
+            for (int attempt = 0; attempt < 100 && !hub.HasExited; attempt++)
             {
-                Process.Start(new ProcessStartInfo("http://127.0.0.1:" + port + "/") { UseShellExecute = true });
+                try
+                {
+                    var request = (HttpWebRequest)WebRequest.Create(health);
+                    request.Timeout = 700;
+                    request.ReadWriteTimeout = 700;
+                    using (var response = (HttpWebResponse)request.GetResponse())
+                    {
+                        if ((int)response.StatusCode == 200) ready = true;
+                    }
+                }
+                catch
+                {
+                    /* not listening yet */
+                }
+                if (ready) break;
+                Thread.Sleep(150);
             }
-            catch
+            if (ready)
             {
-                /* the address is printed in the hub window */
+                try
+                {
+                    Process.Start(new ProcessStartInfo("http://127.0.0.1:" + port + "/") { UseShellExecute = true });
+                }
+                catch
+                {
+                    /* the address is printed in the hub window */
+                }
             }
         });
         opener.IsBackground = true;
@@ -84,5 +116,21 @@ internal static class Program
 
         hub.WaitForExit();
         return hub.ExitCode;
+    }
+
+    /* A double-clicked console closes immediately, hiding the reason. Pause
+       only on failure so a successful hub window behaves exactly as before. */
+    private static void Fail(string message)
+    {
+        Console.Error.WriteLine(message);
+        try
+        {
+            Console.Error.WriteLine("Press Enter to close.");
+            Console.ReadLine();
+        }
+        catch
+        {
+            /* no console attached */
+        }
     }
 }

@@ -1,5 +1,6 @@
 /* ATHENA — hub client. Works on iOS Safari as an installed PWA. */
 import { rankVoices, speechChunks, voiceLabel } from "./speech.mjs";
+import { screenPoint, screenProfile } from "./screen-coords.mjs";
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
@@ -20,6 +21,7 @@ const store = {
     art: localStorage.getItem("athena.art") !== "0",
   },
   focus: null,
+  deviceSession: localStorage.getItem("athena.deviceSession") || "",
   lockInfo: null,
   state: null,
   view: "home",
@@ -30,6 +32,21 @@ const store = {
 };
 
 const CHAT_KEY = "athena.chat";
+const SESSION_DEVICE_KEY = "athena.deviceSession";
+
+/** A stable local identity for THIS browser. It organizes sessions; it is not
+    a credential and is never used in place of the session token. */
+function deviceIdentity() {
+  let id = localStorage.getItem("athena.deviceId") || "";
+  if (!id) {
+    id = globalThis.crypto?.randomUUID?.() || `dev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem("athena.deviceId", id);
+  }
+  const ua = navigator.userAgent || "";
+  const platform = /iPad/i.test(ua) ? "iPad" : /iPhone/i.test(ua) ? "iPhone" : /Android/i.test(ua) ? "Android" : /Windows/i.test(ua) ? "Windows" : /Mac/i.test(ua) ? "macOS" : /Linux/i.test(ua) ? "Linux" : "Browser";
+  const browser = /Edg\//i.test(ua) ? "Edge" : /CriOS|Chrome\//i.test(ua) ? "Chrome" : /Safari\//i.test(ua) ? "Safari" : /Firefox\//i.test(ua) ? "Firefox" : "Browser";
+  return { id, name: `${platform} · ${browser}`, platform: `${platform} · ${browser}` };
+}
 
 function saveChat() {
   try {
@@ -154,11 +171,13 @@ async function unlock() {
     const res = await fetch("/api/session", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, ...deviceIdentity() }),
     });
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "No.");
     store.token = json.token;
+    store.deviceSession = json.device?.id || "";
+    if (store.deviceSession) localStorage.setItem(SESSION_DEVICE_KEY, store.deviceSession);
     localStorage.setItem("athena.session", json.token);
     $("#lock").hidden = true;
     $("#app").hidden = false;
@@ -304,7 +323,7 @@ function renderNodes(nodes, state) {
     details.open = true;
     const body = softBody(id);
     if (!body) continue;
-    if (appsState.nodes.has(id)) renderNodeSoftware(id, body);
+    if (appsState.nodes.has(id) && Date.now() - (appsState.at.get(id) || 0) < SOFT_CACHE_MS) renderNodeSoftware(id, body);
     else void loadNodeSoftware(id);
   }
 }
@@ -352,7 +371,7 @@ function jobFailure(job) {
 function renderJobs(jobs) {
   const list = $("#job-list");
   if (!jobs.length) {
-    list.innerHTML = `<div class="empty"><p class="micro dim">QUEUE IS EMPTY</p><p class="micro dim" style="margin-top:8px">JOBS ARE TASKS ATHENA RUNS OR QUEUES ON A MACHINE. THEY ARRIVE FROM THE AI OR THE API.</p></div>`;
+    list.innerHTML = `<div class="empty"><p class="micro dim">QUEUE IS EMPTY</p><p class="micro dim" style="margin-top:8px">JOBS ARE TASKS QUEUED FOR ONE MACHINE BY THE REST API OR BY AN APP ACTION. THE AI ANSWERS IN CHAT DIRECTLY, SO ITS WORK DOES NOT APPEAR HERE.</p></div>`;
     return;
   }
   const nodeName = (id) => (store.state?.nodes || []).find((node) => node.id === id)?.name || id;
@@ -876,12 +895,13 @@ async function connectStream() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /* fps is measured from frames this browser actually received and painted. */
-const screens = { generation: 0, fps: new Map() };
+const screens = { generation: 0, fps: new Map(), latency: new Map() };
 
-function noteScreenFrame(id) {
+function noteScreenFrame(id, latency = 0) {
   const now = performance.now();
   const stat = screens.fps.get(id) || { frames: 0, since: now, value: 0 };
   stat.frames += 1;
+  screens.latency.set(id, Math.round(latency));
   const elapsed = now - stat.since;
   if (elapsed >= 1200) {
     stat.value = Math.round((stat.frames / (elapsed / 1000)) * 10) / 10;
@@ -890,7 +910,7 @@ function noteScreenFrame(id) {
   }
   screens.fps.set(id, stat);
   if (elapsed >= 1200) {
-    const label = `${stat.value} FPS`;
+    const label = `${stat.value} FPS · ${screens.latency.get(id) || 0} MS`;
     for (const badge of document.querySelectorAll(`[data-fps="${CSS.escape(id)}"]`)) badge.textContent = label;
     if (store.focus === id) {
       const focusBadge = $("#focus-fps");
@@ -923,23 +943,32 @@ function screenCard(node) {
       <div class="screen-note" data-note="${esc(node.id)}">CONNECTING…</div>
       <button class="focus-hint" data-focus="${esc(node.id)}">⤢ FOCUS</button>
     </div>
-    <div class="screen-bar">
-      <button class="btn tiny" data-k="enter" title="Enter" aria-label="Press Enter">⏎</button>
-      <button class="btn tiny" data-k="tab" aria-label="Press Tab">TAB</button>
-      <button class="btn tiny" data-k="esc" aria-label="Press Escape">ESC</button>
-      <button class="btn tiny" data-k="backspace" aria-label="Press Backspace">⌫</button>
-      <button class="btn tiny" data-scroll="3" title="Scroll up" aria-label="Scroll up">▲</button>
-      <button class="btn tiny" data-scroll="-3" title="Scroll down" aria-label="Scroll down">▼</button>
-    </div>
-    <form class="screen-type" data-form="${esc(node.id)}">
-      <input data-text="${esc(node.id)}" placeholder="Type on that PC…" autocomplete="off" spellcheck="false" />
-      <button class="btn tiny solid" type="submit">SEND</button>
-    </form>
+    ${
+      control
+        ? `<div class="screen-bar">
+             <button class="btn tiny" data-k="enter" title="Enter" aria-label="Press Enter">⏎</button>
+             <button class="btn tiny" data-k="tab" aria-label="Press Tab">TAB</button>
+             <button class="btn tiny" data-k="esc" aria-label="Press Escape">ESC</button>
+             <button class="btn tiny" data-k="backspace" aria-label="Press Backspace">⌫</button>
+             <button class="btn tiny" data-scroll="3" title="Scroll up" aria-label="Scroll up">▲</button>
+             <button class="btn tiny" data-scroll="-3" title="Scroll down" aria-label="Scroll down">▼</button>
+           </div>
+           <form class="screen-type" data-form="${esc(node.id)}">
+             <input data-text="${esc(node.id)}" placeholder="Type on that PC…" autocomplete="off" spellcheck="false" />
+             <button class="btn tiny solid" type="submit">SEND</button>
+           </form>`
+        : `<p class="micro dim">VIEW ONLY — REMOTE CONTROL IS OFF ON THAT NODE.</p>`
+    }
     <div class="screen-audio">
       ${
         audio
-          ? `<button class="btn tiny" data-listen="${esc(node.id)}">🔊 LISTEN</button>
-             <button class="btn tiny ghost" data-listen-mute="${esc(node.id)}">MUTE</button>`
+          ? `<select class="audio-pick" data-audio-pick="${esc(node.id)}" aria-label="Audio source">
+               <option value="desktop">PC SOUND</option>
+               <option value="microphone">MICROPHONE</option>
+             </select>
+             <button class="btn tiny" data-listen="${esc(node.id)}">🔊 LISTEN</button>
+             <button class="btn tiny ghost" data-listen-mute="${esc(node.id)}">MUTE</button>
+             <span class="micro dim" data-audio-latency="${esc(node.id)}"></span>`
           : `<span class="micro dim">SOUND OFF · INSTALL FFMPEG IN SOFTWARE</span>`
       }
     </div>
@@ -990,12 +1019,20 @@ async function screenLoop(id, generation) {
   let misses = 0;
   while (generation === screens.generation) {
     if ((store.view !== "screen" && store.focus !== id) || document.hidden) {
-      await sleep(700);
+      await sleep(500);
       misses = 0;
       continue;
     }
+    const focused = store.focus === id;
+    const profile = screenProfile({ focused, hidden: document.hidden, coarse: matchMedia("(pointer: coarse)").matches, viewportWidth: window.innerWidth });
+    if (!profile.active) {
+      await sleep(500);
+      continue;
+    }
     const started = Date.now();
-    const ok = await grabScreen(id, generation);
+    const ok = await grabScreen(id, generation, profile);
+    const latency = Date.now() - started;
+    screens.latency.set(id, latency);
     misses = ok ? 0 : misses + 1;
     /* a dead or blocking node must not turn into a request storm on a phone */
     if (misses >= 3) {
@@ -1003,26 +1040,22 @@ async function screenLoop(id, generation) {
       misses = 0;
       continue;
     }
-    const focused = store.focus === id;
-    /* A focused screen asks for the next frame as soon as the last one was
-       painted; previews get a slower budget so a wall of PCs does not saturate
-       the hub. The sleep only fills whatever is left of the budget. */
-    const tight = window.innerWidth < 760 && !focused;
-    const budget = focused ? 60 : tight ? 900 : 400;
     const spent = Date.now() - started;
-    await sleep(Math.max(0, budget - spent));
+    await sleep(Math.max(0, profile.intervalMs - spent));
   }
 }
 
-async function grabScreen(id, generation) {
+async function grabScreen(id, generation, profile = screenProfile({ focused: store.focus === id })) {
   const imgs = [...document.querySelectorAll(`[data-img="${CSS.escape(id)}"]`)];
   if (!imgs.length) {
     if (store.focus !== id) return true;
   }
   const note = document.querySelector(`[data-note="${CSS.escape(id)}"]`);
   const focusNote = store.focus === id ? $("#focus-note") : null;
+  const started = Date.now();
   try {
-    const res = await fetch(`/api/nodes/${encodeURIComponent(id)}/screen`, {
+    const query = new URLSearchParams({ fps: String(profile.fps), width: String(profile.width) });
+    const res = await fetch(`/api/nodes/${encodeURIComponent(id)}/screen?${query}`, {
       headers: store.token ? { "x-athena-session": store.token } : {},
       cache: "no-store",
     });
@@ -1048,7 +1081,7 @@ async function grabScreen(id, generation) {
     previous.forEach((old) => { if (old !== url) URL.revokeObjectURL(old); });
     if (note) note.hidden = true;
     if (focusNote) focusNote.hidden = true;
-    noteScreenFrame(id);
+    noteScreenFrame(id, Date.now() - started);
     return true;
   } catch (error) {
     const message = String(error.message || error).slice(0, 140).toUpperCase();
@@ -1077,6 +1110,10 @@ function focusNode(id) {
   $("#focus-meta").textContent = `NODE ${String(node.index || 0).padStart(2, "0")} · ${node.host}:${node.port}`;
   $("#focus-badge").textContent = node.online ? (caps.input ? "CONTROL" : "VIEW ONLY") : "OFFLINE";
   $("#focus-badge").className = "badge " + (node.online ? (caps.input ? "ok" : "") : "bad");
+  const inputTools = $("#focus-input-tools");
+  if (inputTools) inputTools.hidden = !caps.input;
+  const audioTools = $("#focus-audio-tools");
+  if (audioTools) audioTools.hidden = !caps.audio;
   if ($("#focus-fps")) $("#focus-fps").textContent = "—";
   const img = $("#focus-img");
   img.dataset.img = id;
@@ -1097,8 +1134,10 @@ function focusNode(id) {
     .join("");
   const listen = $("#focus-listen");
   $("#focus-mute").textContent = audioState.streams.get(id)?.el?.muted ? "UNMUTE" : "MUTE";
-  listen.textContent = audioState.streams.has(id) ? "STOP" : "LISTEN";
-  listen.classList.toggle("solid", audioState.streams.has(id));
+  const activeAudio = audioState.streams.get(id);
+  listen.textContent = activeAudio ? "STOP" : "LISTEN";
+  listen.classList.toggle("solid", Boolean(activeAudio));
+  if ($("#focus-audio-source") && activeAudio?.source) $("#focus-audio-source").value = activeAudio.source;
   $("#focus").hidden = false;
   document.body.classList.add("focusing");
   startScreens();
@@ -1117,14 +1156,6 @@ function closeFocus() {
   if (store.view === "screen") startScreens();
 }
 
-function screenPoint(img, event) {
-  const rect = img.getBoundingClientRect();
-  return {
-    x: Math.min(1, Math.max(0, (event.clientX - rect.left) / (rect.width || 1))),
-    y: Math.min(1, Math.max(0, (event.clientY - rect.top) / (rect.height || 1))),
-  };
-}
-
 async function screenAct(id, payload) {
   try {
     await api(`/api/nodes/${encodeURIComponent(id)}/input`, { method: "POST", body: payload });
@@ -1138,41 +1169,79 @@ async function screenAct(id, payload) {
 /** One <audio> per machine, fed by the hub's MP3 relay from that node. */
 const audioState = { streams: new Map(), muted: false };
 
-async function audioElement(id) {
+function setListenLabels(id, active, source) {
+  for (const button of document.querySelectorAll(`[data-listen="${CSS.escape(id)}"]`)) {
+    button.textContent = active ? "STOP" : "LISTEN";
+    button.classList.toggle("solid", active);
+  }
+  const pick = document.querySelector(`[data-audio-pick="${CSS.escape(id)}"]`);
+  if (pick && active && source) pick.value = source;
+  if (store.focus === id && $("#focus-listen")) {
+    $("#focus-listen").textContent = active ? "STOP" : "LISTEN";
+    $("#focus-listen").classList.toggle("solid", active);
+  }
+  if ($("#focus-audio-source") && active && source) $("#focus-audio-source").value = source;
+}
+
+function stopAudio(id) {
+  const entry = audioState.streams.get(id);
+  if (!entry) return false;
+  entry.el.pause();
+  entry.el.removeAttribute("src");
+  entry.el.load();
+  entry.source = null;
+  audioState.streams.delete(id);
+  setListenLabels(id, false);
+  syncMute();
+  return true;
+}
+
+async function audioElement(id, source = "desktop") {
   const found = audioState.streams.get(id);
-  if (found?.el) return found.el;
+  if (found?.el && found.source === source) return found.el;
+  if (found) stopAudio(id);
   const ticket = await getStreamTicket();
   const el = document.createElement("audio");
   el.autoplay = true;
+  el.playsInline = true;
   el.preload = "none";
   el.muted = audioState.muted;
-  el.src = `/api/nodes/${encodeURIComponent(id)}/audio?ticket=${encodeURIComponent(ticket)}`;
-  el.addEventListener("error", () => toast("No sound from that PC — FFmpeg installed? Stereo Mix enabled in Windows sound settings?", 5600));
-  audioState.streams.set(id, { el });
+  const query = new URLSearchParams({ ticket, source });
+  el.src = `/api/nodes/${encodeURIComponent(id)}/audio?${query}`;
+  const entry = { el, source, startedAt: Date.now(), readyMs: null };
+  el.addEventListener("playing", () => {
+    entry.readyMs = Date.now() - entry.startedAt;
+    const label = document.querySelector(`[data-audio-latency="${CSS.escape(id)}"]`);
+    if (label) label.textContent = `${source === "desktop" ? "PC" : "MIC"} · ${entry.readyMs} MS`;
+  });
+  el.addEventListener("error", () =>
+    toast(
+      source === "desktop"
+        ? "No desktop sound — enable Stereo Mix/VB-CABLE on that PC, or choose MICROPHONE."
+        : "No microphone sound from that PC — check its input device and Windows microphone privacy setting.",
+      6500
+    )
+  );
+  audioState.streams.set(id, entry);
   return el;
 }
 
-async function toggleListen(id, button) {
+async function toggleListen(id, button, source = "desktop") {
   const entry = audioState.streams.get(id);
-  if (entry?.el) {
-    entry.el.pause();
-    entry.el.removeAttribute("src");
-    entry.el.load();
-    audioState.streams.delete(id);
-    button.textContent = "LISTEN";
-    button.classList.remove("solid");
-    syncMute();
-    if ($("#focus-listen") && store.focus === id) $("#focus-listen").textContent = "LISTEN";
+  if (entry?.el && entry.source === source) {
+    stopAudio(id);
     return;
   }
+  /* Switching source stops the old stream first: never microphone + desktop. */
+  if (entry) stopAudio(id);
   try {
-    const el = await audioElement(id);
+    const el = await audioElement(id, source);
+    setListenLabels(id, true, source);
     await el.play();
-    button.textContent = "STOP";
-    button.classList.add("solid");
     syncMute();
-    void describeAudio(id);
+    void describeAudio(id, source);
   } catch {
+    stopAudio(id);
     toast("The browser blocked playback — tap LISTEN again.", 4200);
   }
 }
@@ -1180,16 +1249,16 @@ async function toggleListen(id, button) {
 const audioInfo = new Map();
 
 /** Tell the truth about what is being heard: a microphone, or the PC itself. */
-async function describeAudio(id) {
-  if (audioInfo.has(id)) return;
+async function describeAudio(id, source = "desktop") {
+  const key = `${id}:${source}`;
+  if (audioInfo.has(key)) return;
   try {
     const info = await api(`/api/nodes/${encodeURIComponent(id)}/audio/devices`);
-    audioInfo.set(id, info);
-    if (!info.systemAudio) {
-      toast(
-        `Hearing "${info.default}" on that PC — turn on Stereo Mix in Windows sound settings (Recording devices → show disabled) to hear its own sound.`,
-        7200
-      );
+    audioInfo.set(key, info);
+    if (source === "desktop" && !info.systemAudio) {
+      toast("That PC has no loopback capture device. Enable Stereo Mix or VB-CABLE; ATHENA will not silently use the microphone instead.", 7600);
+    } else if (source === "microphone" && !info.microphoneAudio) {
+      toast("That PC did not report a microphone capture device.", 5200);
     }
   } catch (error) {
     toast(error.message, 6500);
@@ -1204,7 +1273,8 @@ function syncMute() {
 
 /* ────────────────────────────────────────────── software (per node) */
 
-const appsState = { catalogue: [], nodes: new Map(), busy: new Set() };
+const appsState = { catalogue: [], nodes: new Map(), at: new Map(), busy: new Set(), message: new Map() };
+const SOFT_CACHE_MS = 20_000;
 
 /** Software is a property of a machine, so it is read and shown per node. */
 function softBody(nodeId) {
@@ -1228,7 +1298,7 @@ async function loadNodeSoftware(nodeId, { force = false } = {}) {
     body.innerHTML = `<p class="micro dim">OFFLINE — SOFTWARE IS READ ON THE MACHINE ITSELF. START THAT NODE, THEN STATUS.</p>`;
     return;
   }
-  if (appsState.nodes.has(nodeId) && !force) {
+  if (appsState.nodes.has(nodeId) && !force && Date.now() - (appsState.at.get(nodeId) || 0) < SOFT_CACHE_MS) {
     renderNodeSoftware(nodeId, body);
     return;
   }
@@ -1237,6 +1307,7 @@ async function loadNodeSoftware(nodeId, { force = false } = {}) {
     await softwareCatalogue();
     const res = await api(`/api/nodes/${encodeURIComponent(nodeId)}/action`, { method: "POST", body: { op: "apps", args: {} } });
     appsState.nodes.set(nodeId, res.result?.apps || []);
+    appsState.at.set(nodeId, Date.now());
     renderNodeSoftware(nodeId, body);
   } catch (error) {
     body.innerHTML = `<p class="micro job-error">${esc(error.message)}</p>`;
@@ -1253,6 +1324,7 @@ function renderNodeSoftware(nodeId, body) {
     .map((app) => {
       const found = list.find((item) => item.id === app.id);
       const busy = appsState.busy.has(`${nodeId}:${app.id}`);
+      const message = appsState.message.get(`${nodeId}:${app.id}`);
       const badge = !found
         ? `<span class="badge">?</span>`
         : found.running
@@ -1262,7 +1334,8 @@ function renderNodeSoftware(nodeId, body) {
             : `<span class="badge bad">MISSING</span>`;
       const buttons = [];
       if (!busy && found && !found.installed) {
-        buttons.push(`<button class="btn tiny solid" data-app="install" data-node="${esc(nodeId)}" data-id="${app.id}">INSTALL</button>`);
+        const label = app.install === "detect" || app.id === "comfyui" ? "FIND FOLDER" : "INSTALL";
+        buttons.push(`<button class="btn tiny solid" data-app="install" data-node="${esc(nodeId)}" data-id="${app.id}">${label}</button>`);
       }
       if (!busy && app.service && found?.installed) {
         buttons.push(
@@ -1274,6 +1347,7 @@ function renderNodeSoftware(nodeId, body) {
       return `<div class="app-row">
         <div class="app-row-head"><span class="micro">${esc(app.name)}</span>${badge}</div>
         <p class="micro dim">${esc(busy ? "WORKING…" : found?.note || `${app.tag} · ${app.size}`)}</p>
+        ${message ? `<p class="micro ${message.bad ? "job-error" : "accent"}">${esc(message.text)}</p>` : ""}
         <div class="actions">${buttons.join("")}</div>
       </div>`;
     })
@@ -1297,8 +1371,11 @@ async function appAction(nodeId, appId, action, button) {
     });
     const result = res.result || {};
     if (result.ok === false) throw new Error(result.error || result.note || "The machine refused that.");
-    toast(`${appId.toUpperCase()} · ${action.toUpperCase()} DONE ON THAT MACHINE`, 3600);
+    const detail = result.note || (result.where ? `Found at ${result.where}` : "");
+    appsState.message.set(key, { text: detail || `${appId.toUpperCase()} ${action.toUpperCase()} completed.`, bad: false });
+    toast(detail || `${appId.toUpperCase()} · ${action.toUpperCase()} DONE ON THAT MACHINE`, 6500);
   } catch (error) {
+    appsState.message.set(key, { text: String(error.message || error), bad: true });
     toast(error.message, 6500);
   }
   appsState.busy.delete(key);
@@ -1358,7 +1435,24 @@ function renderSystem(state) {
   const sessions = $("#sys-sessions");
   if (sessions) sessions.textContent = state?.sessions != null ? String(state.sessions) : "—";
   const note = $("#sessions-note");
-  if (note && state?.sessionDays) note.textContent = `A device stays unlocked for ${state.sessionDays} days after its last use. Sign out here if a phone is lost.`;
+  if (note && state?.sessionDays) note.textContent = `Each device has its own conversation and settings. A device stays unlocked for ${state.sessionDays} days after its last use.${store.lockInfo?.local ? " This PC is also a controller and appears in the list." : ""}`;
+  const devices = $("#sys-devices");
+  if (devices) {
+    const list = Array.isArray(state?.devices) ? state.devices : [];
+    devices.innerHTML = list.length
+      ? list
+          .map((device) => {
+            const current = device.id === store.deviceSession;
+            return `<div class="app-row">
+              <div class="app-row-head"><span class="micro">${esc(device.name)}${current ? " · THIS DEVICE" : ""}</span>
+                <span class="badge ${current ? "ok" : ""}">${esc(String(device.platform || "unknown").slice(0, 28))}</span></div>
+              <p class="micro dim">LAST USED ${esc(device.lastSeen ? new Date(device.lastSeen).toLocaleString() : "unknown")}${device.legacy ? " · EARLIER SESSION" : ""}</p>
+              <div class="actions">${current ? `<button class="btn tiny danger" data-device-revoke="${esc(device.id)}">SIGN OUT THIS DEVICE</button>` : `<button class="btn tiny danger" data-device-revoke="${esc(device.id)}">REVOKE</button>`}</div>
+            </div>`;
+          })
+          .join("")
+      : `<p class="micro dim">NO DEVICE SESSIONS YET. UNLOCK FROM A PHONE OR OPEN THE HUB ON THIS PC.</p>`;
+  }
 
   const nodes = state?.nodes || [];
   $("#sys-nodes").innerHTML = nodes.length
@@ -1665,7 +1759,7 @@ $("#focus-form").addEventListener("submit", (event) => {
 });
 
 $("#focus-listen").onclick = () => {
-  if (store.focus) void toggleListen(store.focus, $("#focus-listen"));
+  if (store.focus) void toggleListen(store.focus, $("#focus-listen"), $("#focus-audio-source")?.value || "desktop");
 };
 
 $("#focus-mute").onclick = () => {
@@ -1675,6 +1769,62 @@ $("#focus-mute").onclick = () => {
   entry.el.muted = !entry.el.muted;
   $("#focus-mute").textContent = entry.el.muted ? "UNMUTE" : "MUTE";
 };
+
+$("#focus-redraw")?.addEventListener("click", () => {
+  screens.generation += 1;
+  startScreens();
+  toast("Redrawing…");
+});
+
+$("#focus-full")?.addEventListener("click", async () => {
+  const panel = $("#focus");
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await panel.requestFullscreen?.();
+  } catch {
+    toast("Fullscreen is not available in this browser.");
+  }
+});
+
+$("#focus-shot")?.addEventListener("click", async () => {
+  const id = store.focus;
+  if (!id) return;
+  try {
+    const res = await fetch(`/api/nodes/${encodeURIComponent(id)}/screen?fps=1&width=1920`, {
+      headers: store.token ? { "x-athena-session": store.token } : {},
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`Screenshot failed (HTTP ${res.status}).`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${(focusedNode()?.name || "athena").replace(/[^a-z0-9_-]+/gi, "-")}-${new Date().toISOString().replace(/[:.]/g, "-")}.jpg`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  } catch (error) {
+    toast(error.message, 5200);
+  }
+});
+
+$("#focus-status")?.addEventListener("click", async () => {
+  const id = store.focus;
+  if (!id) return;
+  try {
+    await api(`/api/nodes/${encodeURIComponent(id)}/refresh`, { method: "POST" });
+    await loadState();
+    focusNode(id);
+    toast("Status refreshed.");
+  } catch (error) {
+    toast(error.message, 5200);
+  }
+});
+
+$("#focus-panel")?.addEventListener("click", () => {
+  const node = focusedNode();
+  if (!node) return;
+  window.open(`http://${node.host}:${node.port}/`, "_blank", "noopener");
+});
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && store.focus) closeFocus();
@@ -1743,7 +1893,7 @@ $("#node-list").addEventListener("click", (event) => {
   const software = event.target.closest("[data-app]");
   if (software) return void appAction(software.dataset.node, software.dataset.id, software.dataset.app, software);
   const summary = event.target.closest("details[data-soft] > summary");
-  if (summary) void loadNodeSoftware(summary.parentElement.dataset.soft);
+  if (summary) void loadNodeSoftware(summary.parentElement.dataset.soft, { force: true });
 });
 
 $("#screen-redraw").onclick = () => {
@@ -1873,7 +2023,8 @@ $("#screen-grid").addEventListener("click", (event) => {
   const id = card.dataset.node;
   const listen = event.target.closest("[data-listen]");
   if (listen) {
-    void toggleListen(id, listen);
+    const source = card.querySelector("[data-audio-pick]")?.value || "desktop";
+    void toggleListen(id, listen, source);
     return;
   }
   const mute = event.target.closest("[data-listen-mute]");
@@ -1903,14 +2054,6 @@ $("#screen-grid").addEventListener("click", (event) => {
        BASIC/ADV toggle silently changed this and caused misclicks. */
     focusNode(id);
   }
-});
-
-$("#screen-grid").addEventListener("contextmenu", (event) => {
-  const img = event.target.closest("[data-img]");
-  if (!img) return;
-  event.preventDefault();
-  const card = img.closest(".screen-card");
-  if (card) void screenAct(card.dataset.node, { op: "right", ...screenPoint(img, event) });
 });
 
 $("#screen-grid").addEventListener("submit", (event) => {
@@ -2027,13 +2170,39 @@ $("#cfg-model-pick").addEventListener("change", (event) => {
   toast(`Brain → ${model}`, 3200);
 });
 
+$("#sys-devices")?.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-device-revoke]");
+  if (!button) return;
+  const current = button.dataset.deviceRevoke === store.deviceSession;
+  if (!confirm(current ? "Sign out this device? You will need the access code again." : "Revoke this device session? That device will need the access code again.")) return;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(button.dataset.deviceRevoke)}`, { method: "DELETE" });
+    if (current) {
+      store.token = "";
+      store.deviceSession = "";
+      localStorage.removeItem("athena.session");
+      localStorage.removeItem(SESSION_DEVICE_KEY);
+      store.stream?.close();
+      store.stream = null;
+      lock();
+    } else {
+      toast("Device revoked.");
+      await loadState();
+    }
+  } catch (error) {
+    toast(error.message, 5200);
+  }
+});
+
 $("#sessions-clear").onclick = async () => {
   if (!confirm("Sign out every phone and device? Each one will need the access code again.")) return;
   try {
     const res = await api("/api/sessions", { method: "DELETE" });
     toast(`Signed out ${res.count} device${res.count === 1 ? "" : "s"}.`, 3600);
     store.token = "";
+    store.deviceSession = "";
     localStorage.removeItem("athena.session");
+    localStorage.removeItem(SESSION_DEVICE_KEY);
     /* signing out is also forgetting what was said on this device */
     localStorage.removeItem(CHAT_KEY);
     store.chat = [];
@@ -2066,11 +2235,13 @@ async function localUnlock() {
     const res = await fetch("/api/session", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ local: true }),
+      body: JSON.stringify({ local: true, ...deviceIdentity() }),
     });
     if (!res.ok) return false;
     const json = await res.json();
     store.token = json.token;
+    store.deviceSession = json.device?.id || "";
+    if (store.deviceSession) localStorage.setItem(SESSION_DEVICE_KEY, store.deviceSession);
     localStorage.setItem("athena.session", json.token);
     return true;
   } catch {
@@ -2121,8 +2292,9 @@ async function boot() {
   }
   /* waking the phone from the background is when a phone is most stale */
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden || !store.token) return;
-    void loadState();
+    if (!store.token) return;
+    if (!document.hidden && (store.view === "screen" || store.focus)) startScreens();
+    if (!document.hidden) void loadState();
   });
 }
 

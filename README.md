@@ -53,7 +53,10 @@ Closing it stops ATHENA for everyone. If you close it, start it again.
 Copy the **whole `dist/ATHENA-Node-0.1.0`** folder to the render PC (build it
 with `npm run package:node`), then:
 
-1. Double-click **Install Node.cmd** (installs Node if needed, starts the node).
+1. Double-click **Install Node.cmd** (installs Node.js 20+ with winget if needed,
+   then starts the node). It checks the standard Node install path, so a newly
+   installed runtime is found even though the current cmd window's PATH is stale.
+   If Node is too old or missing, it prints the version and asks you to update.
 2. Allow the Windows Firewall prompt for **Private networks**.
 3. The node window shows a big ring and a **six-character pairing code**.
 4. In the hub: **NODES → SCAN**, find the machine (GPU and VRAM shown), type its
@@ -69,6 +72,10 @@ After the first time, **Start Node.cmd** is all you need. The Node's id,
 pairing token and settings live in `%LOCALAPPDATA%\ATHENA Node`, so replacing
 the program folder with a newer Node package keeps the machine paired. There is
 no automatic Node update; upgrading is a deliberate choice.
+
+The Node folder and the Hub folder are **portable packages, not installers**:
+there is no registry entry, service or uninstaller. The Node needs Node.js 20+
+(the installer gets it); the Hub package carries its own `runtime/node.exe`.
 
 ---
 
@@ -97,10 +104,14 @@ It opens full screen with its own icon, no browser chrome.
 Open **SCREEN** in the app. Every online machine shows a live picture of its
 desktop, all at once.
 
-- **Tap the picture** → a real left click at that spot on that PC.
-- **Long-press / right-click** → right click.
+- **Tap a preview** → opens FOCUS. A preview is navigation; it does not click
+  the remote PC.
+- **Tap the focused picture** → a real left click at that spot on that PC.
+- **Long-press / right-click the focused picture** → right click.
 - **SEND** types the text into whatever window is focused there.
-- Enter, Tab, Esc, Backspace and scroll buttons are under the picture.
+- Focus now has grouped Window, Keyboard, Mouse/Scroll, Audio, Display/Capture
+  and Node controls. Remote-control groups are hidden when that node disables
+  input. Display shows measured FPS and request latency.
 
 This is real control (Windows `user32` + `SendKeys`, through the node's
 `host-input.ps1`; pictures come from `host-screen.ps1`), so the mouse on that PC
@@ -115,19 +126,24 @@ takes the screenshot but cannot read it — it will tell you so.
 
 ### Hearing it too
 
-Each screen card has **🔊 LISTEN**, a **MUTE** for that machine, and the
-SCREEN header has **MUTE ALL**. Sound is MP3 streamed from the node itself:
+Each screen card and the focused toolbar have an audio source selector,
+**🔊 LISTEN**, a **MUTE** for that machine, and the SCREEN header has
+**MUTE ALL**. The two sources are deliberately separate:
 
-- the node needs **FFmpeg** (APPS → FFmpeg → INSTALL), then restart the node
-  agent so it is on its PATH;
-- it captures the Windows DirectShow audio device picked automatically. For the
-  machine's **own** sound, enable **Stereo Mix** in Windows sound settings
-  (Recording devices → right click → Show disabled devices). With only a
-  microphone available, ATHENA listens to the mic and says so.
+- **PC SOUND** captures what Windows is playing through Stereo Mix, VB-CABLE or
+  another loopback device.
+- **MICROPHONE** captures the selected Windows input device.
 
-The relay starts a fresh FFmpeg per listener and kills it when you stop, so an
-idle node captures nothing. API: `GET /api/nodes/:id/audio?token=…`
-(`audio/mpeg`) and `GET /api/nodes/:id/audio/devices`.
+They are never mixed, and ATHENA never silently substitutes a microphone when
+PC SOUND is unavailable — it reports that a loopback device is required.
+
+- Install **FFmpeg** at NODES → this machine → SOFTWARE → FFmpeg. The node now
+  refreshes its PATH after install, so a restart is usually unnecessary.
+- The relay uses low-delay FFmpeg flags and starts one process per listener;
+  stopping or switching source kills it, so an idle node captures nothing.
+- API: `GET /api/nodes/:id/audio?source=desktop|microphone` (`audio/mpeg`) and
+  `GET /api/nodes/:id/audio/devices`.
+- Windows DirectShow capture only. macOS/Linux desktop capture is not claimed.
 
 ---
 
@@ -195,13 +211,13 @@ show on a machine that actually renders.
 
 Each app row shows INSTALLED / RUNNING / MISSING for that machine, with
 INSTALL, START and STOP right there. Installs are winget (`Ollama.Ollama`,
-`Gyan.FFmpeg`, …) and can take a few minutes; the card shows WORKING until the
-node answers. After installing a command-line app, restart the node agent so
-its PATH is picked up.
+`Gyan.FFmpeg`, …) and can take a few minutes; the card shows WORKING and then
+reports the real `result.note` — including whether the new tool was detected or
+still needs a node restart.
 
-ComfyUI is installed by unzipping the portable build and letting **FIND COMFY**
-locate it — a 2 GB download behind a GUI installer is not something to hide in
-a button.
+ComfyUI's button says **FIND FOLDER**, not INSTALL: it detects an existing
+portable ComfyUI folder and reports that it did not download anything. A 2 GB
+download behind a GUI installer is not hidden inside a button.
 
 ---
 
@@ -245,7 +261,7 @@ curl -H "x-athena-key: $KEY" $HUB/v1/nodes/NODE_ID/comfy/system_stats
 | Method · path | Purpose |
 | --- | --- |
 | `GET /api/health` | open: is the hub alive |
-| `POST /api/session` | `{code}` → session token (the app uses this) |
+| `POST /api/session` | `{code, deviceId, deviceName, platform}` → session token + device identity |
 | `GET /api/state` | hub, nodes, jobs, keys, brain |
 | `POST /api/scan` | UDP discovery |
 | `POST /api/nodes/pair` | `{host,port,code}` |
@@ -253,12 +269,13 @@ curl -H "x-athena-key: $KEY" $HUB/v1/nodes/NODE_ID/comfy/system_stats
 | `POST /api/nodes/:id/action` | `{op,args}` — node control |
 | `POST /api/nodes/:id/exec` | `{command,wait,timeoutSec}` |
 | `GET /api/nodes/:id/tasks` | running tasks on that node |
-| `GET /api/nodes/:id/screen` | one JPEG of that machine's screen |
+| `GET /api/nodes/:id/screen?fps=&width=` | one JPEG; the node adapts capture to demand |
 | `GET /api/nodes/:id/screen/info` | resolution, input capability |
 | `POST /api/nodes/:id/input` | `{op,x,y,text,key,amount}` — mouse & keyboard |
-| `GET /api/nodes/:id/audio?token=` | live MP3 of that machine's sound |
-| `GET /api/nodes/:id/audio/devices` | capture devices, `systemAudio` flag |
-| `GET /api/apps` | the app catalogue the APPS page shows |
+| `GET /api/nodes/:id/audio?source=` | live MP3: `desktop` or `microphone` |
+| `GET /api/nodes/:id/audio/devices` | separate microphone/desktop devices and availability |
+| `GET /api/apps` | the catalogue used by each node's SOFTWARE section |
+| `GET /api/sessions` · `DELETE /api/sessions/:id` | list controller devices / revoke one |
 | `GET/POST /api/brain/install` | brain install status / start it |
 | `POST /api/brain/upgrade` | search the ladder and move up |
 | `POST /api/hub/shutdown` · `/api/hub/restart` | stop / restart the hub |
@@ -286,10 +303,17 @@ Node ports: HTTP **47910**, discovery UDP **48880**, ComfyUI tunnel `/comfy/*`
 
 ## Security model
 
-- Hub UI: 6-character access code → session token, 8 attempts/minute per IP.
+- Hub UI: 6-character access code → independent per-device session, 8
+  attempts/minute per IP. Each controller has a name/platform and can be revoked
+  from SYSTEM without signing out the others.
 - Tools: API keys, hashed with SHA-256, shown once, revocable.
-- Nodes: pairing code shown only on the machine's own screen; the hub stores a
-  32-byte token per node, and the node forgets it on unlink.
+- Nodes: cryptographically generated pairing code, shown only on the machine's
+  own screen, with 8 attempts/minute per source IP and a one-minute lockout.
+  The hub stores a random 24-byte token per node, and the node forgets it on
+  unlink.
+- **LAN HTTP limitation:** hub/node traffic, including words spoken for
+  pairing and node tokens, is plain HTTP on the LAN. It is not safe on an
+  untrusted network. Put HTTPS/VPN in front of the hub before crossing one.
 - Node capabilities can be switched off per machine in its window
   (**Allow shell commands**, **Allow remote shutdown**).
 - There is no cloud, no account, no telemetry. LAN only. If you expose the hub
@@ -319,16 +343,21 @@ athena/
   working, and jobs survive the phone locking.
 - Screen view and remote control are **Windows only** (the node uses
   PowerShell + user32). Status, commands, ComfyUI and the API work anywhere.
-- Screen is polled as JPEG a few times a second, not a video stream — fine on a
-  LAN, not a remote-desktop replacement for 60 fps work. It pauses while the
-  tab is in the background to save CPU.
+- Screen is polled JPEG, not a video stream. Targets are 30 fps focused and
+  10–12 fps in previews, but real capture cost and the network decide. Actual
+  browser FPS/latency is shown; there are no guaranteed-FPS claims. Capture
+  stops a few seconds after the last viewer and resumes when the tab returns.
+- Audio latency depends on the device driver, FFmpeg and browser buffering. The
+  relay uses low-delay flags and reports startup time, but >10 s latency has not
+  yet been re-measured on the affected iPad.
 - Windows Defender (AMSI) blocks a PowerShell script that both captures the
   screen and injects input, so ATHENA ships them as two small scripts. If you
   edit them, keep them separate.
 - The AI must look first, then click, then look again. It cannot act faster
   than that loop, and it will mis-click sometimes; that is why every click is
   visible on the SCREEN tab.
-- Sound from a PC is not captured.
+- Desktop audio capture needs a Windows loopback device (Stereo Mix,
+  VB-CABLE, etc.). It is not available on macOS/Linux nodes today.
 - Background jobs are shell processes; a node restart drops them.
 - The AI can run commands. That is the point. Keep `allowShell` off on machines
   other people use, and keep API keys out of client-side code.

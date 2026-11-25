@@ -1,8 +1,8 @@
 # ATHENA — Architecture Audit
 
-**Status:** Audit only. No application source was modified, no features were implemented, no dependencies were installed, no configuration was changed, and the project structure was not restructured.
+**Status:** Historical audit of the pre-3.0 architecture, retained for evidence. It is no longer a description of `main`: the reliability/controller sprint added device sessions, bidirectional protocol checks, per-node audio sources, adaptive screen capture and a portable-package fix. The current behavior and remaining limits are in §15 at the end; earlier sections describe the audited commit and must not be read as current status.
 
-**Repository:** `KEO-1st/athena` · branch `main` · HEAD at time of audit `60663d9` ("Give the brain a voice, and stop it talking about apps nobody asked for") · 3 commits, 1 contributor · no `package.json`, no test files, no CI configuration.
+**Repository:** `KEO-1st/athena` · branch `main` · historical HEAD `60663d9`; current implementation audited at `81f1484` plus this sprint · 1 contributor · tests and packaging now exist (see §15).
 
 **Audit date:** 2026-11-24
 
@@ -605,3 +605,93 @@ containing `ATHENA Hub.exe`, a bundled `runtime/node.exe`, the server, `lib/` an
 `public/`. The launcher is a small C# program compiled by the compiler included
 with Windows; it performs no installation. The data directory stays beside the
 executable, so the hub folder must live somewhere writable.
+
+---
+
+## 15. Reliability, multi-PC and controller sprint (2026-11-25)
+
+This section supersedes the stale “no tests / no packaging” statements above.
+It is an implementation record, not a claim that every hardware path was tested.
+
+### 15.1 The three concepts, as the code actually works
+
+| Concept | Current implementation | Boundary |
+| --- | --- | --- |
+| **Hub** | `server.mjs`: authority for config, access code, API keys, controller sessions, node registry/tokens, jobs, integrations, brain, SSE and static PWA. | Owns state; does not need to be the only controller. |
+| **Controller** | Any browser/PWA that signs in with the access code. The hub PC's browser is simply one controller with local auto-unlock. | Its chat and voice settings are in that browser's `localStorage`; the hub does not merge them. |
+| **Node** | `node/athena-node.mjs`: hardware, screen, input, audio, apps, tasks and ComfyUI. Paired to one hub with a token. | Has no brain and no shared conversation state. |
+
+**Is the Hub unnecessarily also a controller?** It serves the controller UI, but
+the authority and the client are separable: the hub process does not depend on
+its own browser. The PC is a controller only because someone opens the app
+there. This sprint gives that browser the same device identity/session model as
+a phone; it does not create a second state owner.
+
+**Can a PC be Hub and Node?** Yes, without duplicated responsibility: start the
+hub and the node as two processes. The node is still a node (token, capabilities,
+local identity); the hub still owns authority. Pairing over loopback works. It
+is not recommended to expose the node port to the internet just because the hub
+is on the same PC.
+
+**Can the Hub manage multiple controllers?** Yes. `POST /api/session` creates an
+independent token per device with a visible name/platform; `GET /api/sessions`
+lists metadata (never tokens) and `DELETE /api/sessions/:id` revokes one. The
+same browser signing in again replaces its own old session, not another
+device's. Legacy timestamp-only sessions are preserved and labelled “Earlier
+device”.
+
+**Can multiple Nodes connect?** Yes. `Registry` stores every node separately,
+with its own token and negotiated protocol. Jobs are serialized per node, not
+globally. A node may only be paired to one hub; unpair first to move it.
+
+**Why no major rewrite?** The current split already matches the target model.
+The safe path was additive: session metadata, protocol-range validation, proxy
+header coverage, per-node source selection and UI organization. Existing node
+tokens, device session tokens, identities and job records were not rewritten.
+A future signed identity/outbound-channel phase can replace transport without
+changing these concepts.
+
+### 15.2 Reliability changes
+
+- Node runtime resolution checks the standard install locations before PATH and
+  enforces Node 20+, fixing the fresh-PC `'node' is not recognized` path.
+- Hub launcher polls `/api/health` before opening a browser and prints a useful
+  failure instead of silently closing.
+- Both packages carry `BUILD-INFO.json` with per-file SHA-256 hashes.
+- Device sessions are individually revocable; the all-device sign-out remains.
+- Screen capture is demand-driven (30 fps focused, 10–12 preview, stops after the
+  last viewer) with measured browser FPS/latency and available capture timing.
+- Click mapping subtracts `object-fit: contain` letterboxing before normalizing,
+  which addresses the iPad offset; mouse/touch use CSS pixels once, not DPR
+  again.
+- Audio source selection is explicit (`desktop` vs `microphone`), never mixed or
+  silently substituted. FFmpeg uses low-delay/no-buffer flags and 48 kHz MP3.
+- Software install reports `result.note`, refreshes PATH, forces detection, and
+  labels ComfyUI's action “FIND FOLDER” because it only detects an existing
+  folder.
+- Thumbnail context-menu remote right-click was removed; previews only navigate.
+
+### 15.3 Security changes and limits
+
+- Pairing codes use `crypto.randomInt`, not `Math.random`, with 8 failed
+  attempts/minute per source IP and a one-minute lockout.
+- Every Hub→Node request, including screen/audio/Comfy proxies, carries
+  `x-athena-hub-protocol`.
+- The Hub validates the Node's declared Hub-protocol range as well as the Node
+  protocol, refusing both before pairing/action. Legacy Nodes remain accepted.
+- Already-paired nodes and existing session tokens are preserved.
+- **Not solved:** LAN traffic is plain HTTP; node tokens are bearer tokens; no
+  TLS, signed node identity or outbound-only channel. Pairing is LAN-grade, not
+  internet-safe. HTTPS/VPN is still required across untrusted networks.
+
+### 15.4 Verification status
+
+Automated: `npm run check` (45/45), `npm test` (84/84), `npm run smoke`.
+Coverage includes controller sessions/revocation, both protocol ranges, raw
+request headers, pairing lockout, screen geometry/adaptive profiles, audio
+classification, software labels, package layout and existing hub/node behavior.
+
+**NOT YET VERIFIED:** a fresh Windows PC with no Node.js, winget under a real
+installer, second-PC firewall/Defender, real iPad/iPhone tap alignment, real
+FPS/latency targets, audible microphone/desktop separation and the >10 s audio
+latency fix. These are manual tests, not passed features.

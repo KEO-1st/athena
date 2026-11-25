@@ -1,7 +1,12 @@
 # ATHENA — Distributed Compute Design
 
-**Status:** target design, not implemented. Nothing here exists in the codebase
-yet except the node registry, the per-node job queue and the hub's local brain.
+**Status:** target design, not implemented. In the current codebase only the
+foundations exist: a multi-node registry with independent tokens, a per-node
+job queue, bidirectional protocol negotiation, per-device controller sessions
+and a hub-local brain. There is still no scheduler, artifact manager, scoped
+node identity or outbound node channel. The three-concept split (Hub authority /
+Controller client / Node resources) is documented in
+`docs/ATHENA_ARCHITECTURE_AUDIT.md` §15.
 
 **Related:** `docs/ATHENA_ARCHITECTURE_AUDIT.md`, `docs/ATHENA_DEVELOPMENT_ROADMAP.md`,
 `docs/ATHENA_TASK_PROPOSAL_AND_EXECUTION_UX.md`.

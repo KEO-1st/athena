@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
-import { ROOT, removeDir, startFakeNode, tempDir } from "./helpers.mjs";
+import { ROOT, freePort, removeDir, startFakeNode, tempDir } from "./helpers.mjs";
+import { nodeFetch } from "../lib/discover.mjs";
 import { Registry } from "../lib/nodes.mjs";
 import {
   HUB_PROTOCOL,
@@ -37,10 +39,44 @@ test("the Node advertises a protocol, Hub range and stable features", () => {
 });
 
 test("a Node inside the Hub's range is compatible", () => {
-  const result = assessNode({ protocol: NODE_PROTOCOL, nodeVersion: "0.1.0", features: ["status"] });
+  const result = assessNode({
+    protocol: NODE_PROTOCOL,
+    nodeVersion: "0.1.0",
+    features: ["status"],
+    hubProtocol: { min: HUB_PROTOCOL, max: HUB_PROTOCOL },
+  });
   assert.equal(result.compatible, true);
   assert.equal(result.status, "ok");
   assert.equal(result.protocol, NODE_PROTOCOL);
+  assert.deepEqual(result.hubProtocol, { min: HUB_PROTOCOL, max: HUB_PROTOCOL });
+});
+
+test("a Node that cannot speak this Hub's protocol is refused", () => {
+  const result = assessNode({
+    protocol: NODE_PROTOCOL,
+    nodeVersion: "9.0.0",
+    features: ["status"],
+    hubProtocol: { min: HUB_PROTOCOL + 1, max: HUB_PROTOCOL + 2 },
+  });
+  assert.equal(result.compatible, false);
+  assert.equal(result.status, "hub-incompatible");
+  assert.match(result.reason, /Hub protocol/);
+  assert.match(result.reason, /Update this Hub/);
+});
+
+test("every nodeFetch request carries the Hub protocol header", async (t) => {
+  const port = await freePort();
+  let seen = "";
+  const server = http.createServer((req, res) => {
+    seen = String(req.headers["x-athena-hub-protocol"] || "");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("{}");
+  });
+  await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const res = await nodeFetch({ host: "127.0.0.1", port, token: "tok" }, "/api/audio?source=desktop");
+  assert.equal(res.status, 200);
+  assert.equal(seen, String(HUB_PROTOCOL));
 });
 
 test("old and new protocol numbers are refused with a useful reason", () => {
