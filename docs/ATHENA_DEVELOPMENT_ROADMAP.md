@@ -2,7 +2,7 @@
 
 **Companion to:** `docs/ATHENA_ARCHITECTURE_AUDIT.md`
 **Status:** Phase 0/1 foundations, ATHENA 3.0 packaging and the 2026-11-25 reliability/controller sprint are implemented. Phase 2 onward is still planned; see the latest delivery record at the end.
-**Baseline:** branch `main`, Hub 3.1.0, Node 0.1.1, zero runtime npm dependencies, 91 automated tests, no CI yet.
+**Baseline:** branch `main`, Hub 3.1.0, Node 0.1.1, zero runtime npm dependencies, 105 automated tests, no CI yet. Provider-independent development instructions live in `AGENTS.md`.
 
 ---
 

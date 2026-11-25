@@ -11,8 +11,10 @@ npm run package:node # standalone Node V0.1 folder + zip
 npm run package:hub  # Hub folder + ATHENA Hub.exe + zip
 ```
 
-All five commands must pass before a change is committed. There is no CI
-configuration yet; run them locally.
+Run `check`, `test` and `smoke` before committing any runtime change; run the
+packaging command only when that package changed. There is no CI configuration
+yet; run them locally. The full provider-independent development and GitHub
+workflow is in `AGENTS.md`.
 
 ## What is automated
 

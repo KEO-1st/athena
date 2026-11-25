@@ -16,6 +16,11 @@ then on:
 
 Zero npm dependencies. Node 20+. Nothing leaves your network.
 
+**Developing ATHENA?** Read `AGENTS.md` first. It defines the
+provider-independent architecture, security boundaries, verification commands
+and GitHub workflow, so any coding agent or developer can continue from
+`origin/main` without private context.
+
 ---
 
 ## 1 · Start the hub (this PC)
@@ -363,6 +368,7 @@ Node ports: HTTP **47910**, discovery UDP **48880**, ComfyUI tunnel `/comfy/*`
 
 ```
 athena/
+  AGENTS.md             instructions for any coding agent or developer
   server.mjs            hub
   lib/                  store · discovery · registry · jobs · brain
   public/               the PWA (index, app.js, styles.css, sw, icons)
