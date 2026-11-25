@@ -961,6 +961,13 @@ const server = http.createServer(async (req, res) => {
             send({ type: "token", text: piece });
           }
         : null;
+      /* Tool turns produce no text tokens until the end; tell the controller
+         what is actually happening instead of leaving it on "thinking". */
+      const onStatus = wantsStream
+        ? (text) => {
+            send({ type: "status", state: "working", text });
+          }
+        : null;
 
       if (wantsStream) {
         /* Open the stream immediately. Waiting for the first model token made
@@ -989,6 +996,7 @@ const server = http.createServer(async (req, res) => {
              controller may ask questions; it may not manage the Hub's model. */
           admin: req.athenaAuth?.admin ? brainInstaller : null,
           onToken,
+          onStatus,
         });
       } catch (error) {
         answer = {

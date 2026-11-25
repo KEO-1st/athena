@@ -23,7 +23,7 @@ A sentence in chat can become real tool calls on the right machine.
 | **Node** (`node/athena-node.mjs`) | Every machine being controlled | Shell, processes, software installs, screen capture, mouse/keyboard, audio, ComfyUI tunnel |
 | **Controller** (`public/`) | Phone, tablet or another PC | PWA chat, Jobs, Nodes, Screen; never Hub administration |
 
-**Current release:** Hub **3.1.0**, Node **0.1.1**, Node protocol **1**.
+**Current release:** Hub **3.2.0**, Node **0.1.1**, Node protocol **1**.
 Zero runtime npm dependencies, Node.js 20+, JSON storage, no build step for the
 controller. Everything stays on the local network: no cloud, account or
 telemetry.
@@ -270,9 +270,11 @@ the previous agent's memory, API keys, local paths or provider account.
 
 Implemented and shipped: the verification baseline (check/test/smoke,
 single Hub version), Phase 0/1 containment work, Hub 3.0 packaging, Node V0.1
-packaging and protocol negotiation, and the 3.1 reliability/security/controller
+packaging and protocol negotiation, the 3.1 reliability/security/controller
 sprint (direct-local admin authority, controller redaction, per-controller
-conversations, bounded model calls, screen-helper recovery, honest audio/TTS).
+conversations, bounded model calls, screen-helper recovery, honest audio/TTS),
+and the 3.2 brain sprint (multi-step tool loop, failure recovery, clarification,
+conversation-aware tool gating, progress events and honest nonzero exits).
 
 Planned but **not implemented** — do not start unless the task explicitly asks:
 

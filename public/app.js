@@ -1103,9 +1103,11 @@ async function submitAsk(text) {
         "content-type": "application/json",
         ...(store.token ? { "x-athena-session": store.token } : {}),
       },
-      body: JSON.stringify({ text: value, history: store.history.slice(-8), stream: true }),
+      body: JSON.stringify({ text: value, history: store.history.slice(-12), stream: true }),
       cache: "no-store",
-      signal: AbortSignal.timeout(120_000),
+      /* A multi-step task may need several provider rounds; the Hub budgets
+         them to 170s, so allow it to finish before the browser gives up. */
+      signal: AbortSignal.timeout(180_000),
     });
     if (res.status === 401) {
       lock();
