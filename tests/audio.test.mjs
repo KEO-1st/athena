@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyAudioDevices, pickAudioDevice } from "../lib/audio-sources.mjs";
+import { audioDeviceBelongsToSource, classifyAudioDevices, pickAudioDevice } from "../lib/audio-sources.mjs";
 
 test("microphone and desktop devices are distinct", () => {
   const inventory = classifyAudioDevices([
@@ -26,4 +26,16 @@ test("a loopback device is not mislabelled as a microphone", () => {
   assert.deepEqual(inventory.microphone, []);
   assert.equal(pickAudioDevice(inventory, "microphone"), null);
   assert.equal(pickAudioDevice(inventory, "desktop"), "Stereo Mix (Realtek(R) Audio)");
+});
+
+test("an explicitly requested device cannot cross audio sources", () => {
+  const inventory = classifyAudioDevices([
+    "Microphone (Realtek(R) Audio)",
+    "Stereo Mix (Realtek(R) Audio)",
+  ]);
+  assert.equal(audioDeviceBelongsToSource(inventory, "desktop", "Stereo Mix (Realtek(R) Audio)"), true);
+  assert.equal(audioDeviceBelongsToSource(inventory, "desktop", "Microphone (Realtek(R) Audio)"), false);
+  assert.equal(audioDeviceBelongsToSource(inventory, "microphone", "Microphone (Realtek(R) Audio)"), true);
+  assert.equal(audioDeviceBelongsToSource(inventory, "microphone", "Stereo Mix (Realtek(R) Audio)"), false);
+  assert.equal(audioDeviceBelongsToSource(inventory, "desktop", "unknown device"), false);
 });

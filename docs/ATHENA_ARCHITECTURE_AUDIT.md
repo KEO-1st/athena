@@ -131,10 +131,10 @@ External *system* dependencies, invoked through the OS: PowerShell/.NET (screen 
 
 | File | Written by | Contents |
 | --- | --- | --- |
-| `data/config.json` | hub `saveConfig()` | hub name, port, brain provider/baseUrl/model/apiKey, `openMode`. |
+| `data/config.json` | hub `saveConfig()` | hub name, port, brain provider/baseUrl/model/apiKey, TTS provider/voice/API key, `openMode`, controller remembering and expiry. |
 | `data/nodes.json` | `Registry.save()` | node id, name, host, port, **plaintext node token**, GPU snapshot. |
 | `data/jobs.json` | `Jobs.save()` | job queue and captured output (up to 60k chars each). |
-| `data/sessions.json` | `saveSessions()` | session token → metadata, 30-day sliding expiry. |
+| `data/sessions.json` | `saveSessions()` | session token → metadata, role, remember flag and configurable sliding expiry. Unremembered sessions are deliberately not persisted. |
 | `data/keys.json` | `saveKeys()` | API key id/name/prefix/SHA-256 hash. |
 | `data/access-code.txt` | `writeCodeFile()` | current 6-character access code, plaintext. |
 | `node/config.json` | node | identity, **plaintext hub token**, capability toggles, Comfy paths, port. |
@@ -167,11 +167,11 @@ Classification: **FI** fully implemented · **PI** partially implemented · **BR
 | Feature | Class | Location | Notes |
 | --- | --- | --- | --- |
 | Static PWA serving with cache headers | FI | `serveStatic` `server.mjs:228` | Path check uses a prefix compare; not a traversal in practice, but weaker than `path.relative`. |
-| Access-code login → session token | FI | `/api/session` `:370`, `authenticate` `:152` | 6-char code, 32-char alphabet, 8 attempts/min/IP; sessions persist 30 days sliding. |
+| Access-code login → session token | FI | `/api/session` `:370`, `authenticate` `:152` | 6-char code, 32-char alphabet, 8 attempts/min/IP; controller expiry/remembering is Hub-configurable. Only a loopback `local:true` login mints the administrator role. |
 | API keys | FI | `/api/keys` `:127`, `authenticate` | Random 18-byte keys, shown once, SHA-256 stored, prefix listed. **No scopes.** |
 | Lock/unlock UX | FI | `/api/lock` `:359`, `public/app.js:144/152` | `/api/lock` returns the access code to loopback callers only. |
 | Open mode (auth disabled) | FI | `isOpen()` `:295`, settings `:728` | Any authenticated session can enable it. |
-| SSE event stream | FI | `/api/events` `:390`, `broadcast` `:253` | Emits `state`, `job`, `chat`, `brain` events; token in query string. |
+| SSE event stream | FI | `/api/events` `:390`, `broadcast` `:253` | Emits audience-filtered `state` and `job` events; chat replies are no longer broadcast. A scoped ticket, not a session token, goes in the query string. |
 | Node discovery | FI | `lib/discover.mjs`, `/api/scan` `:428` | Same-subnet UDP only; merges LAN addresses and stored nodes. |
 | Node pairing | FI | `lib/nodes.mjs:53`, `/api/nodes/pair` `:445` | Exchanges code for token via `POST /api/link`. |
 | Node registry + health refresh | PI | `Registry.refresh` `lib/nodes.mjs:98`, `tick()` `:299` | 8-second polling, writes `nodes.json` on every refresh; no backoff, no history. |
@@ -596,7 +596,8 @@ lowered pitch reinforces the robotic impression. The replacement:
 - splits on word boundaries, because Safari truncates long utterances.
 
 Quality is bounded by the voices installed in Windows/iOS. A local neural engine
-(Piper/Kokoro) is a later Phase 9 option, not a speed tweak.
+(Piper/Kokoro) is a later Phase 9 option, not a speed tweak. **3.1 update:**
+an optional Hub-side Google Cloud TTS provider now exists; see section 16.
 
 ### 14.5 Distribution
 
@@ -695,3 +696,64 @@ classification, software labels, package layout and existing hub/node behavior.
 installer, second-PC firewall/Defender, real iPad/iPhone tap alignment, real
 FPS/latency targets, audible microphone/desktop separation and the >10 s audio
 latency fix. These are manual tests, not passed features.
+
+---
+
+## 16. ATHENA 3.1 core reliability and Hub authority (2026-11-25)
+
+**Hub 3.1.0 · Node 0.1.1 · protocol 1.** This sprint followed real Windows,
+iPhone and iPad use. The automated 3.0 suite was not evidence that those paths
+worked. The root causes found in this code were:
+
+1. Chat headers were emitted only on the first model token, and Ollama calls had
+   a 180-second timeout per round. Qwen3's hidden thinking channel could consume
+   the turn without producing visible content, leaving `…` in the bubble.
+2. Every authenticated session could call `/api/settings`, `/api/sessions`,
+   `/api/keys`, brain installation, node linking and shutdown. The state
+   broadcast also included the full device and key lists for all controllers.
+3. Audio called `play()` after awaiting a stream ticket, outside the user
+   gesture. iOS/desktop browsers therefore blocked it. Microphone and PC Sound
+   controls were also hidden entirely when the node lacked FFmpeg.
+4. No server-side TTS existed at all; `speechSynthesis` was always the voice.
+   The UI now states the provider and never silently substitutes it.
+5. Screen requests waited for a new capture on every poll, coupling browser FPS
+   to JPEG capture rate. A wedged PowerShell helper had no timeout restart.
+   Elevated Windows apps (Task Manager as administrator) refuse UIPI input; that
+   cannot be bypassed from a non-elevated process.
+
+Implemented boundaries and controls:
+
+- `role: admin|controller` sessions; only a loopback `local:true` Hub login is
+  admin. Admin routes return 403 for controllers, API keys and open-mode calls.
+- Controller list/rename/revoke and per-controller remembering are Hub-only. A
+  custom name survives that browser signing in again. Unremembered sessions are
+  memory-only and disappear on Hub restart.
+- Controller SSE state omits keys, device metadata and session counts. Chat
+  replies are returned only to the requesting conversation, never broadcast.
+- Streaming starts with a status line and 8-second heartbeats; model calls are
+  bounded to 60 seconds; failed providers produce a real error/fallback. A bare
+  greeting is answered locally in under 100 ms instead of loading a model, and a
+  local turn is capped at 360 tokens so Qwen3 cannot deliberate for minutes.
+- Only the administrator's chat turn receives the brain-install tool. A
+  controller asking to install or upgrade the Hub brain is refused.
+- New Chat / Clear Chat / per-controller history; legacy `athena.chat` data is
+  migrated without deletion.
+- Audio play happens synchronously from the tap when a ticket is cached; the two
+  sources remain explicit and never fall back to each other.
+- Hub-side Google Cloud TTS is optional (`browser`, `google`, `off`). `/api/tts`
+  reports a missing key/provider failure; it does not call browser speech.
+- Screen telemetry exposes browser FPS, Node capture FPS, capture time, frame age,
+  Node latency and round-trip latency separately. The capture helper is killed
+  and restarted after an 8-second timeout.
+- Internal `echo athena-ok` / `echo keyed-ok` records are preserved but grouped
+  under internal system checks; user jobs stay in the normal queue.
+
+**Limits:** real iOS/iPadOS audio/TTS playback, browser microphone permission
+over LAN HTTP, real two-PC FPS, winget/Defender installs, elevated-window input,
+and visual placement were not verified by automated tests and remain manual.
+
+**Verification on this development PC:** `npm run check` 45/45 files,
+`npm test` 93/93, `npm run smoke` v3.1.0. A real local Ollama `hello` answered in
+87 ms through the built-in greeting path. A non-greeting local prompt still
+loaded qwen3:4b and was slower, which is why the status heartbeat and token cap
+exist; that model's speed is not presented as a passed low-latency target.

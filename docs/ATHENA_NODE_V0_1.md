@@ -1,6 +1,6 @@
 # ATHENA Node V0.1 — contract and packaging
 
-**Status:** implemented in Hub 3.0.0. Node software version `0.1.0`, protocol `1`.
+**Status:** implemented in Hub 3.1.0. Node software version `0.1.1`, protocol `1`.
 
 This document is the compatibility contract between the Hub and a Node. It is
 deliberately separate from the Hub's version. A Node 0.1 installation must keep
@@ -85,8 +85,8 @@ portable or test install.
 ## 4. Packaging
 
 ```
-npm run package:node   → dist/ATHENA-Node-0.1.0/ + zip
-npm run package:hub    → dist/ATHENA-Hub-3.0.0/ + zip (ATHENA Hub.exe)
+npm run package:node   → dist/ATHENA-Node-0.1.1/ + zip
+npm run package:hub    → dist/ATHENA-Hub-3.1.0/ + zip (ATHENA Hub.exe)
 npm run package        → both
 ```
 

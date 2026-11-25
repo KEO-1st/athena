@@ -89,7 +89,7 @@ test("a failed launch is never reported as success", async () => {
 test("a model that pastes JSON is turned into words", async () => {
   const stub = stubBrain([message({ content: '{"ok":true,"opened":"Taskmgr.exe"}' })]);
   try {
-    const answer = await ask({ text: "hello there", config, registry: registryReturning({}), history: [] });
+    const answer = await ask({ text: "tell me a short fact", config, registry: registryReturning({}), history: [] });
     assert.ok(!answer.reply.trim().startsWith("{"), `raw JSON leaked: ${answer.reply}`);
     assert.match(answer.reply, /raw data/i);
   } finally {
@@ -100,7 +100,7 @@ test("a model that pastes JSON is turned into words", async () => {
 test("the model sees the software version and the model name as separate facts", async () => {
   const stub = stubBrain([message({ content: "I am ATHENA." })]);
   try {
-    await ask({ text: "hello there", config, registry: registryReturning({}), history: [] });
+    await ask({ text: "tell me a short fact", config, registry: registryReturning({}), history: [] });
     const system = stub.calls[0].body.messages[0].content;
     assert.match(system, new RegExp(`software version ${VERSION.replace(/\./g, "\\.")}`));
     assert.match(system, /gpt-4o-mini/);

@@ -1,6 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import fs from "node:fs";
 import { request, startHub } from "./helpers.mjs";
 import { VERSION } from "../lib/version.mjs";
 
@@ -116,6 +117,29 @@ test("open mode and code changes require this PC and the current code", async ()
   assert.equal(badBrain.status, 400);
 });
 
+test("saving unrelated settings does not erase a saved provider key", async () => {
+  const saved = await request(hub.port, "/api/settings", {
+    method: "POST",
+    headers: auth(),
+    body: { brain: { provider: "openai", model: "gpt-test", apiKey: "sk-test-preserve" } },
+  });
+  assert.equal(saved.status, 200);
+  const unrelated = await request(hub.port, "/api/settings", {
+    method: "POST",
+    headers: auth(),
+    body: { hubName: "Athena Test Hub", brain: { provider: "openai", model: "gpt-test", apiKey: "" } },
+  });
+  assert.equal(unrelated.status, 200);
+  const config = JSON.parse(await fs.promises.readFile(`${hub.dir}/config.json`, "utf8"));
+  assert.equal(config.brain.apiKey, "sk-test-preserve");
+
+  await request(hub.port, "/api/settings", {
+    method: "POST",
+    headers: auth(),
+    body: { brain: { provider: "auto", model: "", clearApiKey: true } },
+  });
+});
+
 test("the local lock endpoint needs the app's explicit intent header", async () => {
   const denied = await request(hub.port, "/api/lock");
   assert.equal(denied.status, 403);
@@ -161,6 +185,46 @@ test("/api/ask answers a version question from real state, with timing", async (
   assert.ok(res.json.meta.ms < 1000);
 });
 
+test("chat streams status before the final answer and TTS never silently falls back", async () => {
+  const streamed = await request(hub.port, "/api/ask", {
+    method: "POST",
+    headers: auth(),
+    body: { text: "what version are you", history: [], stream: true },
+  });
+  assert.equal(streamed.status, 200);
+  assert.match(streamed.headers["content-type"], /application\/x-ndjson/);
+  const lines = streamed.text.trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(lines[0].type, "status", "the UI gets a response before the model starts");
+  assert.equal(lines.at(-1).type, "done");
+
+  const browser = await request(hub.port, "/api/tts", { method: "POST", headers: auth(), body: { text: "hello" } });
+  assert.equal(browser.status, 409);
+  assert.match(browser.json.error, /browser speech/i);
+
+  const configured = await request(hub.port, "/api/settings", {
+    method: "POST",
+    headers: auth(),
+    body: { tts: { provider: "google", voice: "en-US-Neural2-F", languageCode: "en-US" } },
+  });
+  assert.equal(configured.status, 200);
+  const noKey = await request(hub.port, "/api/tts", { method: "POST", headers: auth(), body: { text: "hello" } });
+  assert.equal(noKey.status, 503);
+  assert.match(noKey.json.error, /no API key/i, "the expected provider is reported, not replaced");
+
+  await request(hub.port, "/api/settings", { method: "POST", headers: auth(), body: { tts: { provider: "browser" } } });
+});
+
+test("revoking controller sessions does not silently delete local conversations", async () => {
+  const js = await request(hub.port, "/app.js");
+  assert.equal(js.status, 200);
+  const start = js.text.indexOf('$("#sessions-clear").onclick');
+  const end = js.text.indexOf("/* first touch anywhere", start);
+  assert.ok(start >= 0 && end > start, "the revoke-all handler is present");
+  const handler = js.text.slice(start, end);
+  assert.match(handler, /lock\(\)/);
+  assert.doesNotMatch(handler, /CHAT_KEY|CHATS_KEY/, "signing out is not a history deletion");
+});
+
 test("software is per machine and Integrations live in System", async () => {
   const page = await request(hub.port, "/");
   assert.equal(page.status, 200);
@@ -175,6 +239,11 @@ test("software is per machine and Integrations live in System", async () => {
   assert.match(page.text, /WINDOW MANAGEMENT/);
   assert.match(page.text, /DISPLAY &amp; CAPTURE/);
   assert.match(page.text, /id="sys-devices"/, "controllers are listed in System");
+  assert.match(page.text, /id="controller-management"/);
+  assert.match(page.text, /id="controllers-btn"/);
+  assert.match(page.text, /id="new-chat"/);
+  assert.match(page.text, /id="chat-history-panel"/);
+  assert.match(page.text, /id="cfg-tts-provider"/);
 
   const js = await request(hub.port, "/app.js");
   assert.equal(js.status, 200);

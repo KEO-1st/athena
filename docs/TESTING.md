@@ -20,15 +20,16 @@ configuration yet; run them locally.
 | --- | --- |
 | `tests/version.test.mjs` | `version.json` is valid semver, matches `package.json`, and no source file hard-codes a version. |
 | `tests/catalog.test.mjs` | The hub and node read one app catalogue; install commands never reach the hub payload. |
-| `tests/brain.test.mjs` | Provider probing is cached and invalidated explicitly. |
+| `tests/brain.test.mjs` | Provider probing is cached and invalidated explicitly; controller brain refusal; instant greeting; `think:false`/token cap; timeout abort cleanup; sequential tool-capability retry with no overlap. |
 | `tests/jobs.test.mjs` | Reboot recovery, running-job cancellation through the node, and the no-cancel-after-done rule, against a fake node. |
-| `tests/hub.test.mjs` | Auth wall, access-code-as-credential rejection, token-in-URL rejection, state contains no code/data dir, Host/Origin policy, CORS, body limits, settings re-confirmation, local intent header, stream tickets, service-worker version substitution. |
+| `tests/hub.test.mjs` | Auth wall, access-code-as-credential rejection, token-in-URL rejection, state contains no code/data dir, Host/Origin policy, CORS, body limits, settings re-confirmation, local intent header, stream tickets, immediate chat status/NDJSON, no TTS browser fallback, service-worker version substitution. |
 | `tests/node.test.mjs` | Node boots in a temp identity directory, loopback alone is insufficient, status requires a credential, log tail is redacted, a hub cannot widen node permissions, Host/body policy. |
 | `tests/smoke.mjs` | Boots the real hub, checks health/version, index, `sw.js`, 401/200 on `/api/state`. |
 | `tests/node-protocol.test.mjs` | Node has its own version; both protocol ranges; legacy Nodes; pairing negotiation stores the Node version and refuses a future/incompatible peer; `nodeFetch` sends the Hub protocol header on raw requests. |
-| `tests/sessions.test.mjs` | Device identity, independent controller sessions, same-browser replacement, individual revocation without signing out the hub. |
-| `tests/screen.test.mjs` | `object-fit: contain` letterboxing, iPad-like offset, portrait pillarboxing, CSS-pixel mapping, adaptive FPS profiles. |
-| `tests/audio.test.mjs` | Microphone and desktop/loopback devices are classified separately; no silent microphone fallback. |
+| `tests/sessions.test.mjs` | Device identity, independent controller sessions, same-browser replacement, Hub-only admin API, rename persistence, configurable remembering/expiry, individual revocation without signing out the hub. |
+| `tests/security.test.mjs` | Direct-local admin bootstrap (loopback socket, loopback Host/Origin, no proxy headers); LAN/proxy replay downgrades admin sessions and tickets; every admin endpoint refuses controllers and API keys; controller/admin SSE audiences; local code endpoint gating. |
+| `tests/screen.test.mjs` | `object-fit: contain` letterboxing, iPad-like offset, portrait pillarboxing, CSS-pixel mapping, adaptive FPS profiles, separate capture/Node/browser telemetry. |
+| `tests/audio.test.mjs` | Microphone and desktop/loopback devices are classified separately; explicitly requested devices cannot cross sources; no silent microphone fallback. |
 | `tests/software.test.mjs` | Result notes are surfaced, ComfyUI is labelled detection, PATH refresh and selected-node targeting are present. |
 | `tests/package.test.mjs` | Node package layout, `run-node.cmd` runtime/version resolution, identity outside program files, build manifest, no auto-updater wording, Hub `ATHENA Hub.exe` compilation and shell. |
 | `tests/speech.test.mjs` | Pronunciation normalisation, word-boundary chunking, voice ranking (Natural first, legacy last). |
@@ -77,17 +78,17 @@ These depend on the host or a browser and are not automated:
 7. **LAN access** — the hub answers only to its own hostnames and IPs. If the
    network uses an alias (for example `athena.home.arpa`), set
    `ATHENA_ALLOWED_HOSTS=athena.home.arpa` on the hub.
-8. **Node install on a second PC** — copy `dist/ATHENA-Node-0.1.0` to a PC with
+8. **Node install on a second PC** — copy `dist/ATHENA-Node-0.1.1` to a PC with
    **no Node.js**, run `Install Node.cmd`, allow the private-network firewall
    prompt, pair from the Hub, restart the PC, and confirm the same node id is
    reused from `%LOCALAPPDATA%\ATHENA Node`. This is **NOT YET VERIFIED**; the
    code now resolves the standard install path instead of trusting the stale
    cmd PATH.
-9. **Hub executable** — unzip `dist/ATHENA-Hub-3.0.0-win64.zip` to a writable
+9. **Hub executable** — unzip `dist/ATHENA-Hub-3.1.0-win64.zip` to a writable
    folder, double-click `ATHENA Hub.exe`, confirm the browser opens, the access
    code is printed, and `data/` is created beside the exe. Check Defender's
    response to a new unsigned executable.
-10. **Voice quality** — SYSTEM → SPOKEN VOICE lists the device's voices; choose a
+10. **Voice quality** — SETTINGS → SPOKEN VOICE lists the device's voices; choose a
     Natural/Online voice, press TEST VOICE, and confirm speed/pitch survive a
     reload. On Windows, compare with a legacy Desktop voice to hear the
     difference.
@@ -97,9 +98,25 @@ These depend on the host or a browser and are not automated:
     note says whether it was detected immediately or needs a restart. Press
     ComfyUI's FIND FOLDER on a machine without it and confirm the label/error
     says detection, not download. **NOT YET VERIFIED on real winget installs.**
-12. **Controller identities** — sign in from an iPhone and an iPad with
-    different names; SYSTEM → CONTROLLERS should list both, leave their chats
-    separate, and allow revoking one while the other stays signed in.
+12. **Controller identities and authority** — sign in from an iPhone and an iPad
+    with different names; SETTINGS → CONTROLLERS on the Hub should list both,
+    leave their chats separate, rename and revoke one while the other stays
+    signed in. On the iPhone, confirm the admin panels are absent and that
+    **NEW CHAT / HISTORY / CLEAR** only affect that device. Open an old legacy
+    chat and confirm it appears in HISTORY rather than disappearing.
+13. **Speech provider** — with Browser speech, TEST VOICE uses the selected
+    device voice. With Google Cloud TTS selected and no key, spoken replies must
+    show a provider error, never switch to browser speech. With a real key,
+    confirm the Hub-generated MP3 plays on iPhone/iPad and after an async chat
+    reply. Record the result honestly; this was not tested on hardware here.
+14. **Screen recovery and FPS** — watch SCREEN for at least a minute and record
+    B (browser), C (capture) and round-trip values separately. Open and close an
+    elevated Task Manager: input may be refused by Windows while it is open, but
+    capture must recover after it closes without restarting the Node.
+15. **Audio gesture and sources** — on iPhone/iPad, tap LISTEN once for PC SOUND
+    and once for MICROPHONE. Confirm no false "playback blocked" on the first
+    tap when the ticket is ready, that switching replaces the stream, and that a
+    missing loopback device reports PC Sound unavailable rather than mic audio.
 
 ## Security checks worth repeating manually
 

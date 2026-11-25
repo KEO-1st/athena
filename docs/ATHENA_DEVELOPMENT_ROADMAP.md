@@ -2,7 +2,7 @@
 
 **Companion to:** `docs/ATHENA_ARCHITECTURE_AUDIT.md`
 **Status:** Phase 0/1 foundations, ATHENA 3.0 packaging and the 2026-11-25 reliability/controller sprint are implemented. Phase 2 onward is still planned; see the latest delivery record at the end.
-**Baseline:** branch `main`, Hub 3.0.0, Node 0.1.0, zero runtime npm dependencies, 84 automated tests, no CI yet.
+**Baseline:** branch `main`, Hub 3.1.0, Node 0.1.1, zero runtime npm dependencies, 91 automated tests, no CI yet.
 
 ---
 
@@ -668,3 +668,29 @@ session must run these manual checks before claiming the hardware-facing goals.
    cleanup policy; currently names are auto-derived and can be revoked only.
 6. Signed installer/update path (Phase 7), which the portable `BUILD-INFO.json`
    hashes make easier to verify.
+
+---
+
+## 23. ATHENA 3.1 reliability and authority sprint (2026-11-25)
+
+**Hub 3.1.0 · Node 0.1.1 · protocol 1.** Scope was the failures found in real
+Windows/iPhone/iPad use, not a visual redesign and not AEGIS.
+
+| Area | Outcome |
+| --- | --- |
+| Hub authority | Administrator and controller are separate session roles. Admin endpoints (controllers, sessions, keys, settings, brain install, integration writes, node link/unlink, Hub stop/restart) reject controller, API-key and open-mode callers on the server. Controller SSE/state omits key and device metadata. |
+| Controllers | Hub-only **CONTROLLERS** panel beside Settings; rename, individual revoke, remember-new-controllers toggle, 1–365 day expiry. Custom names survive re-login. Existing sessions and conversations are preserved. |
+| Chat | Immediate NDJSON status + heartbeat, 60-second model bound, Qwen3 hidden thinking disabled, provider/key errors returned to the client, no fabricated success or broadcast of replies. |
+| Conversations | New Chat, Clear Chat with confirmation, per-controller history with legacy migration. Other devices and other saved conversations are untouched. |
+| Voice | Browser vs Hub Google Cloud TTS vs Off is explicit. Server TTS uses `/api/tts`, requires the Hub key, and reports failure without silently falling back to browser speech. LISTEN remains visible and plays inside the tap. |
+| Screen | Latest-frame delivery instead of polling for a new capture; separate browser FPS, Node capture FPS, capture time and latency; helper timeout kills/restarts a wedged PowerShell process. Elevated Task Manager remains a Windows UIPI limitation. |
+| Controls and Jobs | Removed CLOSE WIN and the duplicate screen action in Nodes; Nodes terminology is consistent; unlink is admin-only. Internal `echo athena-ok`/`echo keyed-ok` checks are grouped separately without deleting them. |
+
+**Future requirements recorded, not implemented:** rename Software to
+Dependencies; show installed dependency versions; notify about updates and newly
+integrated dependencies; full visual redesign; Developer Mode and privileged
+development controls.
+
+**Verification target:** `npm run check`, `npm test`, `npm run smoke`. Real-device
+results must be recorded separately; automated tests cannot prove iOS playback,
+microphone permission, UIPI input, FPS or visual placement.

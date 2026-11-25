@@ -1064,6 +1064,41 @@ main > section + section { margin-top: 26px; }
 .thinking i:nth-child(2) { animation-delay: 0.15s; }
 .thinking i:nth-child(3) { animation-delay: 0.3s; }
 
+.chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 0 8px;
+  border-bottom: 1px solid var(--hair-3);
+}
+.chat-tools { display: flex; flex-wrap: wrap; gap: 5px; }
+.chat-history-panel { margin: 0 0 10px; }
+.chat-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--hair-3);
+}
+.chat-history-row.active { border-color: var(--hair-2); }
+.chat-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px;
+  border: 0;
+  background: none;
+  color: var(--ink-soft);
+  text-align: left;
+  cursor: pointer;
+}
+.chat-open b { font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-open span { font-family: var(--mono); font-size: 7.5px; letter-spacing: 0.08em; color: var(--dim); }
+
 .composer {
   position: fixed;
   left: 50%;
@@ -1546,8 +1581,7 @@ details[open] > summary::before { content: "[ \2212 ]  "; }
   position: sticky;
   bottom: 0;
   z-index: 6;
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  display: flex;
   align-items: stretch;
   margin: 0 calc(-1 * clamp(12px, 3vw, 26px));
   padding: 8px clamp(8px, 2vw, 20px) calc(8px + env(safe-area-inset-bottom));
@@ -1559,6 +1593,7 @@ details[open] > summary::before { content: "[ \2212 ]  "; }
 .tabs button {
   position: relative;
   z-index: 1;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1572,7 +1607,8 @@ details[open] > summary::before { content: "[ \2212 ]  "; }
   transition: color 0.3s;
 }
 .tabs button i { font-style: normal; font-size: 14px; line-height: 1; transition: transform 0.3s, text-shadow 0.3s; }
-.tabs button span { font-family: var(--mono); font-size: 7.5px; letter-spacing: 0.18em; }
+.tabs button span { font-family: var(--mono); font-size: 7.5px; letter-spacing: 0.18em; white-space: nowrap; }
+.tabs button#controllers-btn span { font-size: 6.5px; letter-spacing: 0.1em; }
 .tabs button:hover { color: var(--ink-soft); }
 .tabs button.active { color: var(--accent-hi); }
 .tabs button.active i { transform: translateY(-1px); text-shadow: 0 0 14px var(--glow-strong); }
@@ -1720,7 +1756,7 @@ details[open] > summary::before { content: "[ \2212 ]  "; }
 }
 
 @media (max-width: 520px) {
-  .top-mid, .pill#speak-toggle { display: none; }
+  .top-mid { display: none; }
   .brand h1 { font-size: 15px; letter-spacing: 0.34em; }
   .hero-bar { font-size: 9px; }
   .composer { bottom: 70px; }

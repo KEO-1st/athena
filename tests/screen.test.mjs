@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { containBox, screenPoint, screenProfile } from "../public/screen-coords.mjs";
+import { Registry } from "../lib/nodes.mjs";
+import { startFakeNode, tempDir, removeDir } from "./helpers.mjs";
 
 const rect = { left: 20, top: 100, width: 400, height: 300 };
 
@@ -49,4 +53,25 @@ test("adaptive streaming asks for 30 fps focused and 10-12 fps in preview", () =
   assert.equal(screenProfile({ focused: false, coarse: true }).fps, 10);
   assert.equal(screenProfile({ focused: false, coarse: false, viewportWidth: 390 }).fps, 10);
   assert.equal(screenProfile({ hidden: true }).active, false);
+});
+
+test("screen frames carry separate capture, node and browser measurements", async (t) => {
+  const fake = await startFakeNode();
+  const dir = tempDir("athena-screen");
+  const nodesFile = path.join(dir, "nodes.json");
+  fs.writeFileSync(
+    nodesFile,
+    JSON.stringify({ nodes: [{ id: "node_fake", name: "Fake node", host: "127.0.0.1", port: fake.port, token: fake.token, index: 1 }] })
+  );
+  t.after(async () => {
+    await fake.close();
+    removeDir(dir);
+  });
+  const registry = new Registry(nodesFile);
+  const frame = await registry.screenFrame("node_fake", { fps: 30 });
+  assert.equal(frame.buffer.length, 4);
+  assert.equal(frame.metrics.captureFps, 24.5, "the Node's measured capture rate is not invented");
+  assert.equal(frame.metrics.captureMs, 41);
+  assert.equal(frame.metrics.frameAgeMs, 3);
+  assert.ok(frame.metrics.nodeMs >= 0);
 });

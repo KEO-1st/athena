@@ -21,7 +21,7 @@ import { randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { NODE_VERSION } from "./version.mjs";
 import { MAX_HUB_PROTOCOL, MIN_HUB_PROTOCOL, NODE_FEATURES, NODE_PROTOCOL, helloInfo, hubProtocolSupported } from "./protocol.mjs";
 import { APP_SPECS } from "../lib/app-catalog.mjs";
-import { classifyAudioDevices, pickAudioDevice } from "../lib/audio-sources.mjs";
+import { audioDeviceBelongsToSource, classifyAudioDevices, pickAudioDevice } from "../lib/audio-sources.mjs";
 import { asUrl, programCandidates, resolveProgramTarget } from "./programs.mjs";
 import {
   HttpError,
@@ -689,7 +689,16 @@ function hostCall(kind, op, args = {}, timeoutMs = 20_000) {
     const id = "h" + (state.seq += 1);
     const timer = setTimeout(() => {
       state.waiters.delete(id);
-      reject(new Error(`The ${kind} helper did not answer in time.`));
+      /* A helper can wedge while Windows switches desktop surfaces (for
+         example when Task Manager is opened). Kill and forget it so the next
+         request starts a fresh helper instead of timing out forever. */
+      try {
+        if (state.child) state.child.kill();
+      } catch {
+        /* already gone */
+      }
+      stopHost(kind, `The ${kind} helper did not answer in time and was restarted.`);
+      reject(new Error(`The ${kind} helper did not answer in time; it was restarted.`));
     }, timeoutMs);
     state.waiters.set(id, { resolve, reject, timer });
     try {
@@ -697,6 +706,12 @@ function hostCall(kind, op, args = {}, timeoutMs = 20_000) {
     } catch (error) {
       clearTimeout(timer);
       state.waiters.delete(id);
+      try {
+        if (state.child) state.child.kill();
+      } catch {
+        /* already gone */
+      }
+      stopHost(kind, `The ${kind} helper stopped accepting requests.`);
       reject(error);
     }
   });
@@ -706,7 +721,7 @@ async function captureFrame(maxWidth = Number(config.screenMaxWidth) || 1280) {
   const started = Date.now();
   const reply = await hostCall("screen", "capture", {
     maxWidth: Math.max(320, Math.min(2560, Math.round(Number(maxWidth) || 1280))),
-  });
+  }, 8_000);
   if (!reply.ok || !reply.path) throw new Error(reply.error || "The screen could not be captured.");
   const buffer = fs.readFileSync(String(reply.path));
   lastCaptureMs = Date.now() - started;
@@ -772,9 +787,10 @@ async function screenFrame(requestedFps = 10, requestedWidth = 0) {
   startCaptureLoop();
   /* Serve the freshest frame if it fits this viewer's budget. The old fixed
      120 ms threshold capped every client at ~8 fps regardless of its request. */
-  const target = Math.max(1, Math.min(30, screenTargetFps));
-  const maxAge = Math.max(15, Math.round(1000 / target) - 10);
-  if (!lastFrame || Date.now() - lastFrame.at > maxAge) {
+  /* Return the latest completed capture immediately. Waiting for a new JPEG
+     on every request made the browser's frame rate collapse to the capture
+     rate; the capture loop is already running at the requested budget. */
+  if (!lastFrame || Date.now() - lastFrame.at > 1500) {
     try {
       await captureOnce();
     } catch (error) {
@@ -1452,6 +1468,9 @@ const server = http.createServer(async (req, res) => {
           "Content-Type": "image/jpeg",
           "Content-Length": frame.buffer.length,
           "Cache-Control": "no-store",
+          "X-Athena-Capture-Fps": String(measuredFps()),
+          "X-Athena-Capture-Ms": String(lastCaptureMs || 0),
+          "X-Athena-Frame-Age-Ms": String(Math.max(0, Date.now() - frame.at)),
           ...corsHeadersFor(req),
         });
         return res.end(frame.buffer);
@@ -1502,8 +1521,17 @@ const server = http.createServer(async (req, res) => {
       if (!tokenOk(req)) return send(403, { error: "Bad token." });
       const source = url.searchParams.get("source") || "desktop";
       if (!["microphone", "desktop"].includes(source)) return send(400, { error: "Audio source must be microphone or desktop." });
+      const requested = String(url.searchParams.get("device") || "").trim();
       try {
-        return await startAudio(req, res, url.searchParams.get("device"), source);
+        if (requested) {
+          const inventory = classifyAudioDevices(await audioDevices());
+          if (!audioDeviceBelongsToSource(inventory, source, requested)) {
+            return send(400, {
+              error: `The requested device is not a ${source === "microphone" ? "microphone" : "desktop loopback"} source. ATHENA will not substitute a different source.`,
+            });
+          }
+        }
+        return await startAudio(req, res, requested, source);
       } catch (error) {
         return send(400, { error: String(error?.message || error) });
       }

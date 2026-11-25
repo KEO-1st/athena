@@ -130,7 +130,10 @@ export async function startHub({ dataDir } = {}) {
   const code = fs.existsSync(codeFile) ? fs.readFileSync(codeFile, "utf8").trim() : "";
   let token = "";
   if (code) {
-    const res = await request(port, "/api/session", { method: "POST", body: { code } });
+    /* The test client is on loopback, but an administrator session is only
+       minted when the Hub app explicitly asks for its local session. A plain
+       code login stays a controller. */
+    const res = await request(port, "/api/session", { method: "POST", body: { code, local: true, deviceId: "hub-test-admin", deviceName: "Test Hub" } });
     token = res.json?.token || "";
   }
 
@@ -139,6 +142,11 @@ export async function startHub({ dataDir } = {}) {
     dir,
     code,
     token,
+    admin: Boolean(token),
+    controllerToken: async () => {
+      const res = await request(port, "/api/session", { method: "POST", body: { code, deviceId: `test-controller-${Date.now()}`, deviceName: "Test Controller", platform: "Test · Controller" } });
+      return res.json?.token || "";
+    },
     child,
     output: () => output,
     stop: async () => {
@@ -189,6 +197,16 @@ export async function startFakeNode({ token = "fake-token", onCancel, protocol =
     if (url.pathname === "/api/status") {
       if (req.headers["x-athena-token"] !== token) return send(403, { error: "Bad token." });
       return send(200, { id: "node_fake", name: "Fake node", version: "test", gpu: { name: "Fake GPU", vramGb: 8 }, tasks: [] });
+    }
+    if (url.pathname === "/api/screen") {
+      if (req.headers["x-athena-token"] !== token) return send(403, { error: "Bad token." });
+      res.writeHead(200, {
+        "content-type": "image/jpeg",
+        "x-athena-capture-fps": "24.5",
+        "x-athena-capture-ms": "41",
+        "x-athena-frame-age-ms": "3",
+      });
+      return res.end(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
     }
     if (url.pathname !== "/api/action" || req.method !== "POST") return send(404, { error: "Not found." });
     if (req.headers["x-athena-token"] !== token) return send(403, { error: "Bad token." });

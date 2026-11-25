@@ -20,7 +20,7 @@ test("the Node has its own version, independent of the Hub", () => {
   const nodeFile = JSON.parse(fs.readFileSync(path.join(ROOT, "node", "version.json"), "utf8"));
   const hubFile = JSON.parse(fs.readFileSync(path.join(ROOT, "version.json"), "utf8"));
   assert.equal(NODE_VERSION, nodeFile.version);
-  assert.equal(nodeFile.version, "0.1.0");
+  assert.equal(nodeFile.version, "0.1.1");
   assert.notEqual(NODE_VERSION, hubFile.version, "the Node must not report the Hub version");
 
   const source = fs.readFileSync(path.join(ROOT, "node", "athena-node.mjs"), "utf8");

@@ -50,7 +50,7 @@ Closing it stops ATHENA for everyone. If you close it, start it again.
 
 ## 2 · Turn the other PC into a node
 
-Copy the **whole `dist/ATHENA-Node-0.1.0`** folder to the render PC (build it
+Copy the **whole `dist/ATHENA-Node-0.1.1`** folder to the render PC (build it
 with `npm run package:node`), then:
 
 1. Double-click **Install Node.cmd** (installs Node.js 20+ with winget if needed,
@@ -59,7 +59,7 @@ with `npm run package:node`), then:
    If Node is too old or missing, it prints the version and asks you to update.
 2. Allow the Windows Firewall prompt for **Private networks**.
 3. The node window shows a big ring and a **six-character pairing code**.
-4. In the hub: **NODES → SCAN**, find the machine (GPU and VRAM shown), type its
+4. In the hub: **NODES → SCAN**, find the node (GPU and VRAM shown), type its
    code, press **LINK**.
 
 The node window flips to LINKED and prints its hub name. From then on the hub
@@ -142,14 +142,19 @@ PC SOUND is unavailable — it reports that a loopback device is required.
 - The relay uses low-delay FFmpeg flags and starts one process per listener;
   stopping or switching source kills it, so an idle node captures nothing.
 - API: `GET /api/nodes/:id/audio?source=desktop|microphone` (`audio/mpeg`) and
-  `GET /api/nodes/:id/audio/devices`.
+  `GET /api/nodes/:id/audio/devices`. The LISTEN control is always present for
+  an online node; when FFmpeg is missing it is disabled with that reason rather
+  than disappearing.
+- Browser autoplay is opened inside the LISTEN tap itself. If no short-lived
+  stream ticket is ready yet, ATHENA asks for a second tap instead of reporting
+  a false "playback blocked" error.
 - Windows DirectShow capture only. macOS/Linux desktop capture is not claimed.
 
 ---
 
 ## 4 · Give it a brain
 
-Open **SYSTEM → BRAIN** and press **INSTALL BRAIN**. That is the whole setup:
+Open **SETTINGS → THE MIND** and press **INSTALL BRAIN**. That is the whole setup:
 
 1. Ollama is installed through winget (or the official installer if winget is
    missing), and started;
@@ -221,9 +226,35 @@ download behind a GUI installer is not hidden inside a button.
 
 ---
 
+## 4c · Hub, controllers and conversations
+
+The Hub PC is the administrator. A phone, tablet or other PC is a controller:
+it can use chat, Jobs, Nodes and Screen, but it cannot change Hub security,
+manage other controllers, install the brain, manage keys or stop the Hub. Those
+checks are enforced by the server, not only hidden in the page.
+
+On the Hub, **CONTROLLERS** beside **SETTINGS** lists every signed-in device.
+The administrator can rename or revoke one without signing out the others, turn
+remembering off for new controllers, and choose how many days a remembered
+controller stays valid. A controller gets its own browser storage, conversation
+list and voice choice.
+
+Chat has **NEW CHAT**, **HISTORY** and **CLEAR**. The old single conversation is
+migrated into the list rather than discarded; clearing one conversation does not
+touch another controller or another saved conversation. A model that has not
+answered within a minute now yields an honest fallback instead of a silent
+three-minute wait.
+
+**SPOKEN VOICE** states which layer is speaking. **Browser** voices are generated
+on the controller. **Google Cloud TTS** is Hub-side: the Hub sends MP3 audio and
+never silently falls back to browser speech if the provider fails. **Off**
+disables speech. A Google API key is optional and stored only on the Hub.
+
+---
+
 ## 5 · Let other tools use your machines
 
-**SYSTEM → API KEYS → CREATE KEY.** You get `ath_…` **once** — store it in the
+**SETTINGS → API KEYS → CREATE KEY.** You get `ath_…` **once** — store it in the
 other tool.
 
 Every endpoint accepts either `x-athena-key: ath_…` or
@@ -275,7 +306,8 @@ curl -H "x-athena-key: $KEY" $HUB/v1/nodes/NODE_ID/comfy/system_stats
 | `GET /api/nodes/:id/audio?source=` | live MP3: `desktop` or `microphone` |
 | `GET /api/nodes/:id/audio/devices` | separate microphone/desktop devices and availability |
 | `GET /api/apps` | the catalogue used by each node's SOFTWARE section |
-| `GET /api/sessions` · `DELETE /api/sessions/:id` | list controller devices / revoke one |
+| `GET /api/sessions` · `PATCH/DELETE /api/sessions/:id` | Hub admin: list, rename or revoke a controller |
+| `POST /api/tts` | Hub-side speech when Google Cloud TTS is selected |
 | `GET/POST /api/brain/install` | brain install status / start it |
 | `POST /api/brain/upgrade` | search the ladder and move up |
 | `POST /api/hub/shutdown` · `/api/hub/restart` | stop / restart the hub |
@@ -284,7 +316,7 @@ curl -H "x-athena-key: $KEY" $HUB/v1/nodes/NODE_ID/comfy/system_stats
 | `GET /api/jobs/:id` · `POST …/cancel` | inspect / cancel |
 | `POST /api/ask` | `{text,history}` → answer + tool log |
 | `GET/POST /api/keys` · `DELETE /api/keys/:id` | keys |
-| `POST /api/settings` | hub name, code, open mode, brain |
+| `POST /api/settings` | Hub admin: name, code, open mode, session remembering, brain, TTS |
 | `GET /api/events?token=` | SSE: state + job events |
 | `GET /v1/*` | same resources, built for other tools |
 
@@ -304,8 +336,15 @@ Node ports: HTTP **47910**, discovery UDP **48880**, ComfyUI tunnel `/comfy/*`
 ## Security model
 
 - Hub UI: 6-character access code → independent per-device session, 8
-  attempts/minute per IP. Each controller has a name/platform and can be revoked
-  from SYSTEM without signing out the others.
+  attempts/minute per IP. The administrator session is minted only by a direct
+  request from the Hub app at `127.0.0.1` or `localhost`, and keeps that role
+  only while the request still looks directly local. A LAN host, foreign Origin
+  or proxy-forwarding header downgrades it to a controller; reverse-proxying the
+  admin UI is not supported. Each controller has a name/platform and can be
+  renamed or revoked from **CONTROLLERS** without signing out the others.
+- Controller administration, Hub security, API keys, brain installation,
+  integration writes, node linking/unlinking and Hub shutdown/restart reject
+  ordinary controller sessions with 403, even if a button were forced visible.
 - Tools: API keys, hashed with SHA-256, shown once, revocable.
 - Nodes: cryptographically generated pairing code, shown only on the machine's
   own screen, with 8 attempts/minute per source IP and a one-minute lockout.
@@ -338,15 +377,22 @@ athena/
 ## Honest limitations
 
 - Voice input is Safari/Chrome Web Speech; iOS may require HTTPS. Voice output
-  uses the device's own speech synthesis.
+  is the Hub's configured provider: browser speech by default, or Google Cloud
+  TTS when a key and voice are configured. Real iOS playback after an async reply
+  still needs device verification.
 - iOS pauses web apps in the background — the hub is the part that keeps
   working, and jobs survive the phone locking.
 - Screen view and remote control are **Windows only** (the node uses
   PowerShell + user32). Status, commands, ComfyUI and the API work anywhere.
 - Screen is polled JPEG, not a video stream. Targets are 30 fps focused and
-  10–12 fps in previews, but real capture cost and the network decide. Actual
-  browser FPS/latency is shown; there are no guaranteed-FPS claims. Capture
-  stops a few seconds after the last viewer and resumes when the tab returns.
+  10–12 fps in previews, but real capture cost and the network decide. The badge
+  reports browser FPS (B), Node capture FPS (C) and round-trip latency
+  separately; there are no guaranteed-FPS claims. Capture stops a few seconds
+  after the last viewer and resumes when the tab returns.
+- An elevated Windows app (including Task Manager started as administrator)
+  refuses input from a non-elevated ATHENA Node; this is a Windows UIPI limit.
+  The screen helper now restarts after a timeout, so capture resumes when the
+  elevated window closes instead of staying wedged.
 - Audio latency depends on the device driver, FFmpeg and browser buffering. The
   relay uses low-delay flags and reports startup time, but >10 s latency has not
   yet been re-measured on the affected iPad.

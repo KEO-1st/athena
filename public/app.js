@@ -5,8 +5,23 @@ import { screenPoint, screenProfile } from "./screen-coords.mjs";
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
+const TOKEN_KEY = "athena.session";
+const TOKEN_SESSION_KEY = "athena.session.ephemeral";
+const readStoredToken = () => localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_SESSION_KEY) || "";
+
+function saveAuthToken(token, remember = true) {
+  clearAuthToken();
+  if (remember) localStorage.setItem(TOKEN_KEY, token);
+  else sessionStorage.setItem(TOKEN_SESSION_KEY, token);
+}
+
+function clearAuthToken() {
+  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_SESSION_KEY);
+}
+
 const store = {
-  token: localStorage.getItem("athena.session") || "",
+  token: readStoredToken(),
   /* Athena answers out loud by default — it is a voice-first app. */
   speak: localStorage.getItem("athena.speak") === null ? true : localStorage.getItem("athena.speak") === "1",
   voice: {
@@ -24,14 +39,18 @@ const store = {
   deviceSession: localStorage.getItem("athena.deviceSession") || "",
   lockInfo: null,
   state: null,
+  admin: false,
   view: "home",
   history: [],
   chat: [],
+  conversations: [],
+  chatId: "",
   busy: false,
   stream: null,
 };
 
 const CHAT_KEY = "athena.chat";
+const CHATS_KEY = "athena.chats.v1";
 const SESSION_DEVICE_KEY = "athena.deviceSession";
 
 /** A stable local identity for THIS browser. It organizes sessions; it is not
@@ -48,21 +67,85 @@ function deviceIdentity() {
   return { id, name: `${platform} · ${browser}`, platform: `${platform} · ${browser}` };
 }
 
-function saveChat() {
+function conversationId() {
+  return globalThis.crypto?.randomUUID?.() || `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function freshConversation() {
+  return { id: conversationId(), title: "New conversation", createdAt: Date.now(), updatedAt: Date.now(), messages: [], history: [] };
+}
+
+/** Conversation history lives on this controller. It never leaves the device
+    and it is never shared with another phone, tablet or PC. */
+function readConversations() {
   try {
+    const saved = JSON.parse(localStorage.getItem(CHATS_KEY) || "null");
+    if (saved && Array.isArray(saved.conversations)) {
+      const conversations = saved.conversations
+        .filter((item) => item && item.id && Array.isArray(item.messages))
+        .map((item) => ({
+          id: String(item.id),
+          title: String(item.title || "Conversation").slice(0, 70),
+          createdAt: Number(item.createdAt) || Date.now(),
+          updatedAt: Number(item.updatedAt) || Date.now(),
+          messages: item.messages.slice(-80),
+          history: Array.isArray(item.history) ? item.history.slice(-16) : [],
+        }));
+      return { conversations, activeId: saved.activeId || conversations[0]?.id || "" };
+    }
+    /* One-time migration. The old single conversation is kept, not erased. */
+    const legacy = JSON.parse(localStorage.getItem(CHAT_KEY) || "[]");
+    if (Array.isArray(legacy) && legacy.length) {
+      const message = {
+        id: conversationId(),
+        title: String(legacy.find((entry) => entry.role === "me")?.text || "Earlier conversation").slice(0, 70),
+        createdAt: Number(legacy[0]?.at) || Date.now(),
+        updatedAt: Number(legacy.at(-1)?.at) || Date.now(),
+        messages: legacy.slice(-80),
+        history: legacy
+          .slice(-16)
+          .map((entry) => ({ role: entry.role === "me" ? "user" : "assistant", content: String(entry.text || "") }))
+          .filter((entry) => entry.content),
+      };
+      return { conversations: [message], activeId: message.id };
+    }
+  } catch {
+    /* private mode / damaged storage — start clean without deleting anything */
+  }
+  return { conversations: [], activeId: "" };
+}
+
+function activeConversation() {
+  return store.conversations.find((item) => item.id === store.chatId) || null;
+}
+
+function persistConversations() {
+  try {
+    const active = activeConversation();
+    if (active) {
+      active.messages = store.chat.slice(-80);
+      active.history = store.history.slice(-16);
+      active.updatedAt = Date.now();
+      if (active.title === "New conversation") {
+        const first = store.chat.find((entry) => entry.role === "me" && entry.text);
+        if (first) active.title = String(first.text).slice(0, 70);
+      }
+    }
+    localStorage.setItem(CHATS_KEY, JSON.stringify({ activeId: store.chatId, conversations: store.conversations.slice(-30) }));
+    /* Keep the legacy key in sync for one release so an older cached shell can
+       still restore the active conversation without losing it. */
     localStorage.setItem(CHAT_KEY, JSON.stringify(store.chat.slice(-40)));
   } catch {
     /* private mode / quota — the conversation just is not kept */
   }
 }
 
+function saveChat() {
+  persistConversations();
+}
+
 function loadChat() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(CHAT_KEY) || "[]");
-    return Array.isArray(saved) ? saved : [];
-  } catch {
-    return [];
-  }
+  return activeConversation()?.messages || [];
 }
 
 const esc = (value) =>
@@ -146,6 +229,9 @@ async function api(path, options = {}) {
     json = { raw: text };
   }
   if (res.status === 401) {
+    store.token = "";
+    store.admin = false;
+    clearAuthToken();
     lock();
     throw new Error(json.error || "Locked.");
   }
@@ -176,9 +262,10 @@ async function unlock() {
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "No.");
     store.token = json.token;
+    store.admin = Boolean(json.admin);
     store.deviceSession = json.device?.id || "";
     if (store.deviceSession) localStorage.setItem(SESSION_DEVICE_KEY, store.deviceSession);
-    localStorage.setItem("athena.session", json.token);
+    saveAuthToken(json.token, json.remember !== false);
     $("#lock").hidden = true;
     $("#app").hidden = false;
     await loadState();
@@ -209,6 +296,9 @@ function nodeBusy(node) {
 function render() {
   const state = store.state;
   if (!state) return;
+  store.admin = Boolean(state.admin);
+  document.body.dataset.admin = store.admin ? "yes" : "no";
+  $$("[data-admin-only]").forEach((element) => (element.hidden = !store.admin));
   const nodes = state.nodes || [];
   const online = nodes.filter((node) => node.online);
 
@@ -239,6 +329,7 @@ function render() {
   $("#speak-toggle").innerHTML = `VOICE <b>${store.speak ? "ON" : "OFF"}</b>`;
   $("#speak-toggle").classList.toggle("on", store.speak);
 
+  renderVoicePanel();
   renderOrbNodes(nodes);
   renderNodes(nodes, state);
   renderScreens();
@@ -270,7 +361,7 @@ function renderNodes(nodes, state) {
   $("#api-example").textContent = `curl -H "x-athena-key: ath_…" http://${state.hub.addresses?.[0] || "localhost"}:${state.hub.port}/v1/health\n\ncurl -X POST -H "x-athena-key: ath_…" -H "content-type: application/json" \\\n  -d '{"command":"nvidia-smi"}' \\\n  http://${state.hub.addresses?.[0] || "localhost"}:${state.hub.port}/v1/nodes/${nodes[0]?.id || "NODE"}/exec`;
 
   if (!nodes.length) {
-    list.innerHTML = `<div class="empty"><p class="micro dim">NO MACHINES YET</p><p class="micro dim" style="margin-top:8px">RUN THE NODE ON A PC, THEN SCAN</p></div>`;
+    list.innerHTML = `<div class="empty"><p class="micro dim">NO NODES YET</p><p class="micro dim" style="margin-top:8px">RUN THE NODE ON A PC, THEN SCAN</p></div>`;
     return;
   }
 
@@ -310,8 +401,7 @@ function renderNodes(nodes, state) {
         <div class="actions">
           <button class="btn tiny solid" data-act="focus" data-id="${node.id}">⤢ FOCUS</button>
           <button class="btn tiny" data-act="refresh" data-id="${node.id}">STATUS</button>
-          <button class="btn tiny" data-act="screen" data-id="${node.id}">SCREEN</button>
-          <button class="btn tiny danger" data-act="unpair" data-id="${node.id}">UNLINK</button>
+          ${store.admin ? `<button class="btn tiny danger" data-act="unpair" data-id="${node.id}">UNLINK NODE</button>` : ""}
         </div>
       </article>`;
     })
@@ -355,11 +445,19 @@ function jobDescription(job) {
 
 function jobOrigin(job) {
   const source = String(job.source || "api").toLowerCase();
+  if (isInternalJob(job)) return { badge: "SYSTEM", why: "Internal ATHENA connectivity check. It was not created by you and can be ignored." };
   const who = job.createdBy ? ` by ${job.createdBy}` : " — created before the Hub recorded which client asked";
   if (source === "api") return { badge: "API", why: `Sent to the Hub's REST API${who}.` };
   if (source === "hub" || source === "app") return { badge: "APP", why: `Queued from the ATHENA app${who}.` };
   if (source === "chat") return { badge: "CHAT", why: `Queued from a chat request${who}.` };
   return { badge: source.toUpperCase(), why: `Origin reported as “${source}”${who}.` };
+}
+
+/** The old API smoke checks are data, not user work. Keep them, but do not put
+    them at the top of the queue as if they were meaningful jobs. */
+function isInternalJob(job) {
+  const command = String(job?.args?.command || "").trim().toLowerCase();
+  return /^echo\s+(athena|keyed)-ok$/.test(command) && String(job?.source || "api") === "api";
 }
 
 function jobFailure(job) {
@@ -368,45 +466,52 @@ function jobFailure(job) {
   return String(reason).slice(0, 300);
 }
 
+function jobCard(job, nodeName) {
+  const badge = JOB_BADGE[job.state] || "";
+  const failure = jobFailure(job);
+  const output = String(job.output || "").trim();
+  const origin = jobOrigin(job);
+  return `<article class="card bracket job" data-state="${esc(job.state)}">
+    <div class="card-top">
+      <div>
+        <h3 style="font-size:13px">${esc(jobDescription(job))}</h3>
+        <p class="micro dim">${esc(nodeName(job.node))} · ${esc(job.op.toUpperCase())} · ${esc(origin.badge)}</p>
+      </div>
+      <span class="badge ${badge}">${esc(job.state)}</span>
+    </div>
+    <p class="micro dim">WHY · ${esc(origin.why)}</p>
+    <div class="job-times">
+      <span class="micro dim">QUEUED ${esc(formatWhen(job.createdAt))}</span>
+      <span class="micro dim">STARTED ${esc(formatWhen(job.startedAt))}</span>
+      <span class="micro dim">ENDED ${esc(formatWhen(job.endedAt))}</span>
+      <span class="micro dim">TOOK ${esc(formatDuration(job))}</span>
+      ${job.code != null ? `<span class="micro dim">EXIT ${esc(job.code)}</span>` : ""}
+    </div>
+    ${failure ? `<p class="micro job-error">✕ ${esc(failure)}</p>` : ""}
+    ${output ? `<details class="job-output"><summary class="micro dim">OUTPUT (${output.length} CHARS)</summary><pre class="code">${esc(output.slice(-4000))}</pre></details>` : `<p class="micro dim">No output.</p>`}
+    <div class="actions">
+      <button class="btn tiny ghost" data-job="${job.id}">SEND TO CHAT</button>
+      ${output ? `<button class="btn tiny" data-copy-job="${job.id}">COPY OUTPUT</button>` : ""}
+      ${["queued", "running"].includes(job.state) ? `<button class="btn tiny danger" data-cancel="${job.id}">CANCEL</button>` : ""}
+    </div>
+  </article>`;
+}
+
 function renderJobs(jobs) {
   const list = $("#job-list");
   if (!jobs.length) {
-    list.innerHTML = `<div class="empty"><p class="micro dim">QUEUE IS EMPTY</p><p class="micro dim" style="margin-top:8px">JOBS ARE TASKS QUEUED FOR ONE MACHINE BY THE REST API OR BY AN APP ACTION. THE AI ANSWERS IN CHAT DIRECTLY, SO ITS WORK DOES NOT APPEAR HERE.</p></div>`;
+    list.innerHTML = `<div class="empty"><p class="micro dim">QUEUE IS EMPTY</p><p class="micro dim" style="margin-top:8px">JOBS ARE TASKS QUEUED FOR ONE NODE BY THE REST API OR BY AN APP ACTION. THE AI ANSWERS IN CHAT DIRECTLY, SO ITS WORK DOES NOT APPEAR HERE.</p></div>`;
     return;
   }
   const nodeName = (id) => (store.state?.nodes || []).find((node) => node.id === id)?.name || id;
-  list.innerHTML = jobs
-    .map((job) => {
-      const badge = JOB_BADGE[job.state] || "";
-      const failure = jobFailure(job);
-      const output = String(job.output || "").trim();
-      const origin = jobOrigin(job);
-      return `<article class="card bracket job" data-state="${esc(job.state)}">
-        <div class="card-top">
-          <div>
-            <h3 style="font-size:13px">${esc(jobDescription(job))}</h3>
-            <p class="micro dim">${esc(nodeName(job.node))} · ${esc(job.op.toUpperCase())} · ${esc(origin.badge)}</p>
-          </div>
-          <span class="badge ${badge}">${esc(job.state)}</span>
-        </div>
-        <p class="micro dim">WHY · ${esc(origin.why)}</p>
-        <div class="job-times">
-          <span class="micro dim">QUEUED ${esc(formatWhen(job.createdAt))}</span>
-          <span class="micro dim">STARTED ${esc(formatWhen(job.startedAt))}</span>
-          <span class="micro dim">ENDED ${esc(formatWhen(job.endedAt))}</span>
-          <span class="micro dim">TOOK ${esc(formatDuration(job))}</span>
-          ${job.code != null ? `<span class="micro dim">EXIT ${esc(job.code)}</span>` : ""}
-        </div>
-        ${failure ? `<p class="micro job-error">✕ ${esc(failure)}</p>` : ""}
-        ${output ? `<details class="job-output"><summary class="micro dim">OUTPUT (${output.length} CHARS)</summary><pre class="code">${esc(output.slice(-4000))}</pre></details>` : `<p class="micro dim">No output.</p>`}
-        <div class="actions">
-          <button class="btn tiny ghost" data-job="${job.id}">SEND TO CHAT</button>
-          ${output ? `<button class="btn tiny" data-copy-job="${job.id}">COPY OUTPUT</button>` : ""}
-          ${["queued", "running"].includes(job.state) ? `<button class="btn tiny danger" data-cancel="${job.id}">CANCEL</button>` : ""}
-        </div>
-      </article>`;
-    })
-    .join("");
+  const meaningful = jobs.filter((job) => !isInternalJob(job));
+  const internal = jobs.filter(isInternalJob);
+  list.innerHTML =
+    meaningful.map((job) => jobCard(job, nodeName)).join("") +
+    (meaningful.length ? "" : `<div class="empty"><p class="micro dim">NO USER JOBS YET</p><p class="micro dim" style="margin-top:8px">THE ONLY ENTRIES BELOW ARE INTERNAL CONNECTIVITY CHECKS.</p></div>`) +
+    (internal.length
+      ? `<details class="panel" style="margin-top:12px"><summary class="micro">INTERNAL SYSTEM CHECKS · ${internal.length}</summary><p class="micro dim">THESE ARE OLD HUB-TO-NODE SMOKE TESTS. THEY ARE PRESERVED AS HISTORY, NOT COUNTED AS YOUR WORK.</p><div class="cards">${internal.map((job) => jobCard(job, nodeName)).join("")}</div></details>`
+      : "");
 }
 
 function renderKeys(keys) {
@@ -429,7 +534,26 @@ function renderKeys(keys) {
 }
 
 function renderConfig(state) {
+  if (!store.admin) return;
   if (document.activeElement?.closest(".panel")) return;
+  const tts = state.tts || {};
+  if ($("#cfg-tts-provider")) $("#cfg-tts-provider").value = tts.provider || "browser";
+  if ($("#cfg-tts-voice")) $("#cfg-tts-voice").value = tts.voice || "";
+  if ($("#cfg-tts-language")) $("#cfg-tts-language").value = tts.languageCode || "";
+  if ($("#tts-state")) {
+    $("#tts-state").textContent =
+      tts.provider === "google"
+        ? tts.configured
+          ? `GOOGLE CLOUD TTS · ${tts.voice || "voice not set"} · KEY SAVED ON THIS HUB`
+          : "GOOGLE CLOUD TTS SELECTED · NO API KEY SAVED — SPOKEN REPLIES WILL REPORT THE PROVIDER ERROR"
+        : tts.provider === "off"
+          ? "SPEECH IS OFF ON THIS HUB"
+          : "BROWSER SPEECH ON EACH CONTROLLER · NO AUDIO LEAVES THE DEVICE";
+  }
+  return fillHubConfig(state);
+}
+
+function fillHubConfig(state) {
   $("#cfg-name").value = state.hub.name || "";
   const local = Boolean(store.lockInfo?.local);
   $("#cfg-code").value = store.lockInfo?.code || "";
@@ -523,11 +647,26 @@ function addMessage(role, text, extra = {}) {
   return wrap;
 }
 
-/** Reloads the conversation after a refresh — the phone no longer loses it. */
+function initializeConversations() {
+  const saved = readConversations();
+  store.conversations = saved.conversations;
+  store.chatId = saved.activeId;
+  if (!activeConversation()) {
+    const conversation = freshConversation();
+    store.conversations.push(conversation);
+    store.chatId = conversation.id;
+  }
+  store.chat = [...(activeConversation()?.messages || [])];
+  store.history = [...(activeConversation()?.history || [])];
+}
+
+/** Reloads the active conversation after a refresh — the phone no longer loses it. */
 function restoreChat() {
   const saved = loadChat();
+  store.chat = [...saved];
+  store.history = [...(activeConversation()?.history || [])];
+  renderConversationList();
   if (!saved.length) return;
-  store.chat = saved;
   $$("#chat .msg").forEach((element) => element.remove());
   for (const entry of saved) {
     addMessage(entry.role === "me" ? "me" : "athena", entry.text, {
@@ -535,9 +674,105 @@ function restoreChat() {
       code: entry.code || "",
       restore: true,
     });
-    store.history.push({ role: entry.role === "me" ? "user" : "assistant", content: entry.text });
+  }
+  if (!store.history.length) {
+    store.history = saved
+      .map((entry) => ({ role: entry.role === "me" ? "user" : "assistant", content: String(entry.text || "") }))
+      .filter((entry) => entry.content);
   }
   store.history = store.history.slice(-16);
+  renderConversationList();
+}
+
+function renderConversationList() {
+  const list = $("#chat-history-list");
+  if (!list) return;
+  const title = $("#chat-title");
+  if (title) title.textContent = (activeConversation()?.title || "CONVERSATION").toUpperCase();
+  const conversations = [...store.conversations].sort((a, b) => b.updatedAt - a.updatedAt);
+  list.innerHTML = conversations.length
+    ? conversations
+        .map(
+          (item) => `<div class="chat-history-row ${item.id === store.chatId ? "active" : ""}">
+            <button class="chat-open" data-chat-open="${esc(item.id)}">
+              <b>${esc(item.title)}</b>
+              <span>${esc(new Date(item.updatedAt).toLocaleString())} · ${item.messages.length} MESSAGE${item.messages.length === 1 ? "" : "S"}</span>
+            </button>
+            <button class="btn tiny danger" data-chat-delete="${esc(item.id)}" title="Delete this conversation">DELETE</button>
+          </div>`
+        )
+        .join("")
+    : `<p class="micro dim">NO CONVERSATIONS YET</p>`;
+}
+
+function showConversation(id) {
+  const conversation = store.conversations.find((item) => item.id === id);
+  if (!conversation) return;
+  persistConversations();
+  store.chatId = id;
+  store.chat = [...conversation.messages];
+  store.history = [...(conversation.history || [])];
+  $$("#chat .msg").forEach((element) => element.remove());
+  for (const entry of store.chat) {
+    addMessage(entry.role === "me" ? "me" : "athena", entry.text, {
+      tools: entry.tools || [],
+      code: entry.code || "",
+      restore: true,
+    });
+  }
+  persistConversations();
+  renderConversationList();
+  $("#chat-history-panel").hidden = true;
+}
+
+function newChat() {
+  persistConversations();
+  const conversation = freshConversation();
+  store.conversations.push(conversation);
+  store.chatId = conversation.id;
+  store.chat = [];
+  store.history = [];
+  $$("#chat .msg").forEach((element) => element.remove());
+  persistConversations();
+  renderConversationList();
+  $("#chat-history-panel").hidden = true;
+  $("#ask").focus();
+}
+
+function clearChat() {
+  if (!store.chat.length && !store.history.length) return toast("This conversation is already empty.");
+  if (!confirm("Clear this conversation? Its messages are removed from this controller. Other conversations and other controllers are not touched.")) return;
+  store.chat = [];
+  store.history = [];
+  const active = activeConversation();
+  if (active) {
+    active.messages = [];
+    active.history = [];
+    active.title = "New conversation";
+    active.updatedAt = Date.now();
+  }
+  $$("#chat .msg").forEach((element) => element.remove());
+  persistConversations();
+  renderConversationList();
+}
+
+function deleteConversation(id) {
+  const conversation = store.conversations.find((item) => item.id === id);
+  if (!conversation) return;
+  if (!confirm(`Delete “${conversation.title}”? This cannot be undone.`)) return;
+  store.conversations = store.conversations.filter((item) => item.id !== id);
+  if (store.chatId === id) {
+    if (!store.conversations.length) store.conversations.push(freshConversation());
+    store.chatId = store.conversations.at(-1).id;
+    store.chat = [...activeConversation().messages];
+    store.history = [...(activeConversation().history || [])];
+    $$("#chat .msg").forEach((element) => element.remove());
+    for (const entry of store.chat) {
+      addMessage(entry.role === "me" ? "me" : "athena", entry.text, { tools: entry.tools || [], code: entry.code || "", restore: true });
+    }
+  }
+  persistConversations();
+  renderConversationList();
 }
 
 function thinking() {
@@ -602,7 +837,7 @@ function renderVoicePanel() {
     pick.innerHTML = `<option value="">No speech voices reported yet</option>`;
     pick.disabled = true;
   } else {
-    pick.disabled = false;
+    pick.disabled = serverProvider() !== "browser";
     const chosen = selectedVoice(voices);
     pick.innerHTML = voices
       .map((voice) => `<option value="${esc(voice.name)}"${voice.name === chosen?.name ? " selected" : ""}>${esc(voiceLabel(voice))}</option>`)
@@ -614,10 +849,27 @@ function renderVoicePanel() {
   if (pitch) pitch.value = String(store.voice.pitch);
   const note = $("#voice-note");
   if (note) {
-    note.textContent = voices.length
-      ? `${voices.length} voice${voices.length === 1 ? "" : "s"} installed on this device · ${voices[0].name} sounds most natural here. Speech is generated by this browser, not by the hub.`
-      : "This browser has not reported any voices. On Windows, add voices in Settings → Time & language → Speech. On iOS, they download in Settings → Accessibility → Spoken Content.";
+    if (serverProvider() === "google") {
+      note.textContent = `The Hub is using Google Cloud TTS voice ${store.state?.tts?.voice || "(not set)"}. This browser's voice list is not used, and a server failure is reported instead of falling back to it.`;
+    } else if (serverProvider() === "off") {
+      note.textContent = "Spoken replies are switched off on the Hub.";
+    } else {
+      note.textContent = voices.length
+        ? `${voices.length} voice${voices.length === 1 ? "" : "s"} installed on this device · ${voices[0].name} sounds most natural here. Speech is generated by this browser, not by the Hub.`
+        : "This browser has not reported any voices. On Windows, add voices in Settings → Time & language → Speech. On iOS, they download in Settings → Accessibility → Spoken Content.";
+    }
   }
+  const architecture = $("#voice-architecture");
+  if (architecture) {
+    architecture.textContent =
+      serverProvider() === "google"
+        ? "HUB-SIDE SPEECH · the Hub sends MP3 audio generated by Google Cloud TTS to this controller. No browser voice is substituted."
+        : serverProvider() === "off"
+          ? "SPEECH OFF · spoken replies are disabled on the Hub."
+          : "DEVICE-SIDE SPEECH · this browser generates the audio locally. Google Cloud TTS is not configured, so no server voice is implied.";
+  }
+  const pickLabel = $("#voice-pick-label");
+  if (pickLabel) pickLabel.textContent = serverProvider() === "browser" ? "BROWSER VOICE ON THIS DEVICE" : "BROWSER VOICE (NOT USED BY THE CURRENT PROVIDER)";
 }
 
 function speakNext(gen) {
@@ -643,7 +895,7 @@ function speakNext(gen) {
   }
 }
 
-function speak(text) {
+function speakBrowser(text) {
   if (!store.speak || !speechReady()) return;
   const chunks = speechChunks(text);
   if (!chunks.length) return;
@@ -675,6 +927,118 @@ function speak(text) {
       }
     }, 5000);
   }, 90);
+}
+
+/* Server speech is a different path on purpose. When the Hub is configured to
+   use Google Cloud TTS, a failure is reported as that provider failing; the
+   browser's robotic voice is never substituted silently. */
+const serverSpeech = { el: null, gen: 0, chunks: [], running: false };
+
+function serverProvider() {
+  return store.state?.tts?.provider || "browser";
+}
+
+function silentWav() {
+  return "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+}
+
+/** Called from a real tap so iOS allows the later server-audio payload. */
+function primeServerVoice() {
+  if (serverProvider() !== "google") return;
+  if (!serverSpeech.el) {
+    serverSpeech.el = document.createElement("audio");
+    serverSpeech.el.playsInline = true;
+    serverSpeech.el.setAttribute("playsinline", "");
+  }
+  try {
+    if (!serverSpeech.el.src) serverSpeech.el.src = silentWav();
+    serverSpeech.el.play().catch(() => undefined);
+  } catch {
+    /* The next explicit tap can try again. */
+  }
+}
+
+function stopServerSpeech() {
+  serverSpeech.gen += 1;
+  serverSpeech.chunks = [];
+  serverSpeech.running = false;
+  if (serverSpeech.el) {
+    try {
+      serverSpeech.el.pause();
+    } catch {
+      /* already stopped */
+    }
+  }
+}
+
+async function speakServer(text) {
+  if (!store.speak) return;
+  const chunks = speechChunks(text, 1400);
+  if (!chunks.length) return;
+  primeServerVoice();
+  const gen = ++serverSpeech.gen;
+  serverSpeech.chunks = chunks;
+  serverSpeech.running = true;
+  const el = serverSpeech.el;
+  while (gen === serverSpeech.gen && serverSpeech.chunks.length) {
+    const chunk = serverSpeech.chunks.shift();
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(store.token ? { "x-athena-session": store.token } : {}),
+        },
+        body: JSON.stringify({ text: chunk }),
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error || `Speech HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      if (gen !== serverSpeech.gen) return;
+      const url = URL.createObjectURL(blob);
+      el.src = url;
+      await el.play();
+      await new Promise((resolve) => {
+        const done = () => resolve();
+        el.addEventListener("ended", done, { once: true });
+        el.addEventListener("error", done, { once: true });
+      });
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      if (gen === serverSpeech.gen) {
+        toast(`The selected Hub voice failed: ${String(error.message || error).slice(0, 180)} Browser speech was not substituted.`, 7200);
+      }
+      break;
+    }
+  }
+  if (gen === serverSpeech.gen) serverSpeech.running = false;
+}
+
+function speak(text) {
+  if (!store.speak) return;
+  const provider = serverProvider();
+  if (provider === "off") return;
+  if (provider === "google") {
+    stopBrowserSpeech();
+    void speakServer(text);
+    return;
+  }
+  stopServerSpeech();
+  speakBrowser(text);
+}
+
+function stopBrowserSpeech() {
+  if (!speechReady()) return;
+  spokenChunks = [];
+  speakGen += 1;
+  try {
+    speechSynthesis.cancel();
+  } catch {
+    /* nothing playing */
+  }
 }
 
 /**
@@ -725,6 +1089,7 @@ function liveMessage() {
 async function submitAsk(text) {
   const value = String(text || "").trim();
   if (!value || store.busy) return;
+  primeServerVoice();
   store.busy = true;
   $("#ask").value = "";
   addMessage("me", value);
@@ -740,12 +1105,22 @@ async function submitAsk(text) {
       },
       body: JSON.stringify({ text: value, history: store.history.slice(-8), stream: true }),
       cache: "no-store",
+      signal: AbortSignal.timeout(120_000),
     });
     if (res.status === 401) {
       lock();
       throw new Error("Locked.");
     }
-    if (!res.ok) throw new Error(`Hub said ${res.status}.`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      let message = `Hub said ${res.status}.`;
+      try {
+        message = JSON.parse(text).error || message;
+      } catch {
+        if (text.trim()) message = text.trim().slice(0, 300);
+      }
+      throw new Error(message);
+    }
 
     const type = res.headers.get("content-type") || "";
     let answer = {};
@@ -771,6 +1146,10 @@ async function submitAsk(text) {
             if (!streamed) pending.remove();
             streamed += event.text;
             live.show(streamed);
+          } else if (event.type === "status") {
+            if (!streamed) {
+              live.show(event.text || (event.elapsedSec ? `Still working · ${event.elapsedSec}s` : "ATHENA is thinking…"));
+            }
           } else if (event.type === "done") {
             answer = event;
           }
@@ -781,17 +1160,24 @@ async function submitAsk(text) {
     }
 
     pending.remove();
-    const reply = answer.reply || streamed || "…";
+    if (answer.error && !answer.reply && !streamed) throw new Error(answer.error);
+    const reply = String(answer.reply || streamed || "").trim();
+    if (!reply) throw new Error("ATHENA returned no message. The configured brain may have failed; nothing was invented.");
     live.commit(reply, { tools: answer.actions || [], images: answer.images || [] });
     store.history.push({ role: "user", content: value }, { role: "assistant", content: reply });
     store.history = store.history.slice(-16);
+    saveChat();
+    renderConversationList();
     speak(reply);
     loadState();
   } catch (error) {
     pending.remove();
     if (streamed) live.commit(streamed);
     else live.wrap.remove();
-    addMessage("athena", String(error.message || error));
+    const message = error?.name === "TimeoutError" || /aborted/i.test(String(error?.message || ""))
+      ? "ATHENA did not answer within two minutes. The provider or Node did not respond; the request was stopped."
+      : String(error.message || error);
+    addMessage("athena", message);
   } finally {
     store.busy = false;
   }
@@ -810,6 +1196,7 @@ function startListening() {
     render();
   }
   primeVoice();
+  primeServerVoice();
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!Recognition) {
     toast("Voice input is not available in this browser. Type instead.");
@@ -895,10 +1282,12 @@ async function connectStream() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /* fps is measured from frames this browser actually received and painted. */
-const screens = { generation: 0, fps: new Map(), latency: new Map() };
+const screens = { generation: 0, fps: new Map(), latency: new Map(), capture: new Map(), node: new Map() };
 
-function noteScreenFrame(id, latency = 0) {
+function noteScreenFrame(id, latency = 0, capture = {}, nodeMs = 0) {
   const now = performance.now();
+  screens.capture.set(id, capture);
+  screens.node.set(id, Math.round(nodeMs));
   const stat = screens.fps.get(id) || { frames: 0, since: now, value: 0 };
   stat.frames += 1;
   screens.latency.set(id, Math.round(latency));
@@ -910,11 +1299,19 @@ function noteScreenFrame(id, latency = 0) {
   }
   screens.fps.set(id, stat);
   if (elapsed >= 1200) {
-    const label = `${stat.value} FPS · ${screens.latency.get(id) || 0} MS`;
-    for (const badge of document.querySelectorAll(`[data-fps="${CSS.escape(id)}"]`)) badge.textContent = label;
+    const measured = screens.capture.get(id) || {};
+    const label = `B ${stat.value} · C ${Number(measured.captureFps || 0).toFixed(1)} · ${screens.latency.get(id) || 0} MS`;
+    const title = `Browser ${stat.value} FPS · Node capture ${Number(measured.captureFps || 0).toFixed(1)} FPS in ${measured.captureMs || 0} ms · round trip ${screens.latency.get(id) || 0} ms · node ${screens.node.get(id) || 0} ms`;
+    for (const badge of document.querySelectorAll(`[data-fps="${CSS.escape(id)}"]`)) {
+      badge.textContent = label;
+      badge.title = title;
+    }
     if (store.focus === id) {
       const focusBadge = $("#focus-fps");
-      if (focusBadge) focusBadge.textContent = label;
+      if (focusBadge) {
+        focusBadge.textContent = label;
+        focusBadge.title = title;
+      }
     }
   }
 }
@@ -941,7 +1338,6 @@ function screenCard(node) {
     <div class="screen-stage">
       <img alt="Screen of ${esc(node.name)}" data-img="${esc(node.id)}" draggable="false" />
       <div class="screen-note" data-note="${esc(node.id)}">CONNECTING…</div>
-      <button class="focus-hint" data-focus="${esc(node.id)}">⤢ FOCUS</button>
     </div>
     ${
       control
@@ -960,17 +1356,13 @@ function screenCard(node) {
         : `<p class="micro dim">VIEW ONLY — REMOTE CONTROL IS OFF ON THAT NODE.</p>`
     }
     <div class="screen-audio">
-      ${
-        audio
-          ? `<select class="audio-pick" data-audio-pick="${esc(node.id)}" aria-label="Audio source">
-               <option value="desktop">PC SOUND</option>
-               <option value="microphone">MICROPHONE</option>
-             </select>
-             <button class="btn tiny" data-listen="${esc(node.id)}">🔊 LISTEN</button>
-             <button class="btn tiny ghost" data-listen-mute="${esc(node.id)}">MUTE</button>
-             <span class="micro dim" data-audio-latency="${esc(node.id)}"></span>`
-          : `<span class="micro dim">SOUND OFF · INSTALL FFMPEG IN SOFTWARE</span>`
-      }
+      <select class="audio-pick" data-audio-pick="${esc(node.id)}" aria-label="Audio source"${audio ? "" : " disabled"}>
+        <option value="desktop">PC SOUND</option>
+        <option value="microphone">MICROPHONE</option>
+      </select>
+      <button class="btn tiny" data-listen="${esc(node.id)}"${audio ? "" : " disabled"}>🔊 LISTEN</button>
+      <button class="btn tiny ghost" data-listen-mute="${esc(node.id)}"${audio ? "" : " disabled"}>MUTE</button>
+      <span class="micro dim" data-audio-latency="${esc(node.id)}">${audio ? "PC SOUND OR MICROPHONE" : "FFMPEG REQUIRED FOR BOTH SOURCES"}</span>
     </div>
   </article>`;
 }
@@ -987,7 +1379,7 @@ function renderScreens() {
   grid.dataset.signature = signature;
   grid.innerHTML = nodes.length
     ? nodes.map(screenCard).join("")
-    : `<div class="empty"><p class="micro dim">NO MACHINE IS ANSWERING</p><p class="micro dim" style="margin-top:8px">START THE NODE AGENT ON A PC, THEN OPEN NODES → SCAN</p></div>`;
+    : `<div class="empty"><p class="micro dim">NO NODE IS ANSWERING</p><p class="micro dim" style="margin-top:8px">START THE NODE AGENT ON A PC, THEN OPEN NODES → SCAN</p></div>`;
 
   const deck = $("#screen-deck");
   if (deck) {
@@ -1000,7 +1392,7 @@ function renderScreens() {
             </div>`
           )
           .join("")
-      : `<span class="micro dim">NO SIGNAL · LINK A MACHINE FIRST</span>`;
+      : `<span class="micro dim">NO SIGNAL · LINK A NODE FIRST</span>`;
   }
 
   if (nodes.length && (store.view === "screen" || store.focus)) startScreens();
@@ -1081,7 +1473,11 @@ async function grabScreen(id, generation, profile = screenProfile({ focused: sto
     previous.forEach((old) => { if (old !== url) URL.revokeObjectURL(old); });
     if (note) note.hidden = true;
     if (focusNote) focusNote.hidden = true;
-    noteScreenFrame(id, Date.now() - started);
+    noteScreenFrame(id, Date.now() - started, {
+      captureFps: Number(res.headers.get("x-athena-capture-fps")) || 0,
+      captureMs: Number(res.headers.get("x-athena-capture-ms")) || 0,
+      frameAgeMs: Number(res.headers.get("x-athena-frame-age-ms")) || 0,
+    }, Number(res.headers.get("x-athena-node-ms")) || 0);
     return true;
   } catch (error) {
     const message = String(error.message || error).slice(0, 140).toUpperCase();
@@ -1196,14 +1592,11 @@ function stopAudio(id) {
   return true;
 }
 
-async function audioElement(id, source = "desktop") {
-  const found = audioState.streams.get(id);
-  if (found?.el && found.source === source) return found.el;
-  if (found) stopAudio(id);
-  const ticket = await getStreamTicket();
+function createAudioEntry(id, source, ticket) {
   const el = document.createElement("audio");
   el.autoplay = true;
   el.playsInline = true;
+  el.setAttribute("playsinline", "");
   el.preload = "none";
   el.muted = audioState.muted;
   const query = new URLSearchParams({ ticket, source });
@@ -1214,19 +1607,20 @@ async function audioElement(id, source = "desktop") {
     const label = document.querySelector(`[data-audio-latency="${CSS.escape(id)}"]`);
     if (label) label.textContent = `${source === "desktop" ? "PC" : "MIC"} · ${entry.readyMs} MS`;
   });
-  el.addEventListener("error", () =>
+  el.addEventListener("error", () => {
+    stopAudio(id);
     toast(
       source === "desktop"
         ? "No desktop sound — enable Stereo Mix/VB-CABLE on that PC, or choose MICROPHONE."
         : "No microphone sound from that PC — check its input device and Windows microphone privacy setting.",
       6500
-    )
-  );
+    );
+  });
   audioState.streams.set(id, entry);
-  return el;
+  return entry;
 }
 
-async function toggleListen(id, button, source = "desktop") {
+async function toggleListen(id, source = "desktop") {
   const entry = audioState.streams.get(id);
   if (entry?.el && entry.source === source) {
     stopAudio(id);
@@ -1234,15 +1628,31 @@ async function toggleListen(id, button, source = "desktop") {
   }
   /* Switching source stops the old stream first: never microphone + desktop. */
   if (entry) stopAudio(id);
+
+  /* iOS only accepts play() inside the tap's synchronous task. The ticket is
+     already cached after the event stream connects, so the common path does no
+     await before play(). The old code awaited a fresh ticket first, which is
+     why the browser reported playback blocked on desktop and iOS. */
+  if (!streamTicket.value) {
+    try {
+      await getStreamTicket();
+    } catch (error) {
+      toast(error.message, 4500);
+      return;
+    }
+    toast("Sound is ready. Tap LISTEN once more.", 3200);
+    return;
+  }
+
+  const created = createAudioEntry(id, source, streamTicket.value);
+  setListenLabels(id, true, source);
   try {
-    const el = await audioElement(id, source);
-    setListenLabels(id, true, source);
-    await el.play();
+    await created.el.play();
     syncMute();
     void describeAudio(id, source);
   } catch {
     stopAudio(id);
-    toast("The browser blocked playback — tap LISTEN again.", 4200);
+    toast("The browser blocked playback — tap LISTEN again after this screen finishes loading.", 4200);
   }
 }
 
@@ -1428,6 +1838,16 @@ let brainPoll = null;
 function renderSystem(state) {
   const hub = state?.hub || {};
   const addresses = [`http://127.0.0.1:${hub.port}`, ...(hub.addresses || []).map((address) => `http://${address}:${hub.port}`)];
+  if (!store.admin) {
+    $("#sys-addresses").textContent = "ADMINISTRATION AVAILABLE ON THE HUB PC";
+    $("#sys-code").textContent = "HIDDEN";
+    $("#sys-pid").textContent = "—";
+    $("#sys-uptime").textContent = "—";
+    $("#sys-sessions").textContent = "—";
+    $("#sys-devices").innerHTML = `<p class="micro dim">CONTROLLER MANAGEMENT IS AVAILABLE ON THE HUB PC ONLY.</p>`;
+    $("#sys-nodes").innerHTML = `<p class="micro dim">YOU CAN VIEW AND CONTROL NODES FROM THE NODES AND SCREEN TABS.</p>`;
+    return;
+  }
   $("#sys-addresses").textContent = addresses.join("  ·  ");
   $("#sys-code").textContent = hub.openMode ? "OPEN MODE" : store.lockInfo?.code || "ON THIS PC ONLY";
   $("#sys-pid").textContent = hub.pid ? `PID ${hub.pid} · v${hub.version}` : "—";
@@ -1435,7 +1855,11 @@ function renderSystem(state) {
   const sessions = $("#sys-sessions");
   if (sessions) sessions.textContent = state?.sessions != null ? String(state.sessions) : "—";
   const note = $("#sessions-note");
-  if (note && state?.sessionDays) note.textContent = `Each device has its own conversation and settings. A device stays unlocked for ${state.sessionDays} days after its last use.${store.lockInfo?.local ? " This PC is also a controller and appears in the list." : ""}`;
+  if (note && state?.sessionDays) {
+    note.textContent = state.rememberControllers
+      ? `Each controller has its own conversation. A remembered controller stays unlocked for ${state.sessionDays} days after its last use.`
+      : "Remembering new controllers is off. They must unlock again after the browser closes or the Hub restarts. Existing remembered sessions stay valid until revoked or expired.";
+  }
   const devices = $("#sys-devices");
   if (devices) {
     const list = Array.isArray(state?.devices) ? state.devices : [];
@@ -1443,15 +1867,26 @@ function renderSystem(state) {
       ? list
           .map((device) => {
             const current = device.id === store.deviceSession;
+            const isAdmin = device.role === "admin";
             return `<div class="app-row">
               <div class="app-row-head"><span class="micro">${esc(device.name)}${current ? " · THIS DEVICE" : ""}</span>
-                <span class="badge ${current ? "ok" : ""}">${esc(String(device.platform || "unknown").slice(0, 28))}</span></div>
-              <p class="micro dim">LAST USED ${esc(device.lastSeen ? new Date(device.lastSeen).toLocaleString() : "unknown")}${device.legacy ? " · EARLIER SESSION" : ""}</p>
-              <div class="actions">${current ? `<button class="btn tiny danger" data-device-revoke="${esc(device.id)}">SIGN OUT THIS DEVICE</button>` : `<button class="btn tiny danger" data-device-revoke="${esc(device.id)}">REVOKE</button>`}</div>
+                <span class="badge ${isAdmin ? "ok" : ""}">${esc(isAdmin ? "HUB ADMIN" : String(device.platform || "unknown").slice(0, 28))}</span></div>
+              <p class="micro dim">${esc(String(device.platform || "unknown platform").slice(0, 60))} · LAST USED ${esc(device.lastSeen ? new Date(device.lastSeen).toLocaleString() : "unknown")}${device.remember === false ? " · NOT REMEMBERED" : ""}${device.legacy ? " · EARLIER SESSION" : ""}</p>
+              <div class="actions">
+                ${isAdmin ? "" : `<button class="btn tiny" data-device-rename="${esc(device.id)}">RENAME</button>`}
+                ${current ? `<button class="btn tiny danger" data-device-revoke="${esc(device.id)}">SIGN OUT THIS DEVICE</button>` : `<button class="btn tiny danger" data-device-revoke="${esc(device.id)}">REVOKE</button>`}
+              </div>
             </div>`;
           })
           .join("")
-      : `<p class="micro dim">NO DEVICE SESSIONS YET. UNLOCK FROM A PHONE OR OPEN THE HUB ON THIS PC.</p>`;
+      : `<p class="micro dim">NO CONTROLLER SESSIONS YET. UNLOCK FROM A PHONE OR OPEN THE HUB ON THIS PC.</p>`;
+  }
+  const remember = $("#cfg-remember");
+  if (remember) remember.checked = state?.rememberControllers !== false;
+  const days = $("#cfg-session-days");
+  if (days) {
+    days.value = String(state?.sessionDays || 30);
+    days.disabled = state?.rememberControllers === false;
   }
 
   const nodes = state?.nodes || [];
@@ -1469,7 +1904,7 @@ function renderSystem(state) {
           </div>`
         )
         .join("")
-    : `<p class="micro dim">NO MACHINES LINKED. START A NODE AGENT ON A PC, THEN NODES → SCAN.</p>`;
+    : `<p class="micro dim">NO NODES LINKED. START A NODE AGENT ON A PC, THEN NODES → SCAN.</p>`;
 }
 
 async function brainStatus() {
@@ -1611,7 +2046,7 @@ async function act(nodeId, op) {
   if (op === "focus") return focusNode(nodeId);
   if (op === "screen") return switchView("screen");
   if (op === "unpair") {
-    if (!confirm("Unlink this machine? ATHENA will lose control of it.")) return;
+    if (!confirm("Unlink this Node? ATHENA will lose control of it until it is linked again.")) return;
     await api(`/api/nodes/${encodeURIComponent(nodeId)}`, { method: "DELETE" }).catch((error) => toast(error.message));
     return loadState();
   }
@@ -1633,7 +2068,30 @@ $("#code").addEventListener("keydown", (event) => {
 $("#lock").addEventListener("submit", (event) => event.preventDefault());
 
 $$(".tabs button").forEach((button) => {
-  button.onclick = () => switchView(button.dataset.tab);
+  button.onclick = () => {
+    if (button.dataset.tab) switchView(button.dataset.tab);
+  };
+});
+
+$("#controllers-btn")?.addEventListener("click", () => {
+  if (!store.admin) return;
+  switchView("system");
+  setTimeout(() => $("#controller-management")?.scrollIntoView({ block: "center", behavior: "smooth" }), 80);
+});
+
+$("#new-chat")?.addEventListener("click", newChat);
+$("#clear-chat")?.addEventListener("click", clearChat);
+$("#chat-history-btn")?.addEventListener("click", () => {
+  renderConversationList();
+  const panel = $("#chat-history-panel");
+  panel.hidden = !panel.hidden;
+  panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+});
+$("#chat-history-list")?.addEventListener("click", (event) => {
+  const open = event.target.closest("[data-chat-open]");
+  if (open) return showConversation(open.dataset.chatOpen);
+  const remove = event.target.closest("[data-chat-delete]");
+  if (remove) return deleteConversation(remove.dataset.chatDelete);
 });
 
 /* ─────────────────────────────────────────────────────────── look */
@@ -1662,7 +2120,7 @@ function saveVoiceSetting() {
 $("#voice-pick")?.addEventListener("change", (event) => {
   store.voice.name = event.target.value;
   saveVoiceSetting();
-  if (store.speak) speak("This is my voice.");
+  if (store.speak && serverProvider() === "browser") speak("This is my voice.");
 });
 
 for (const id of ["#voice-rate", "#voice-pitch"]) {
@@ -1681,6 +2139,7 @@ $("#voice-test")?.addEventListener("click", () => {
     $("#speak-toggle").innerHTML = "VOICE <b>ON</b>";
   }
   primeVoice();
+  primeServerVoice();
   speak("Athena online. This is how I sound on this device. I can read version 3 point 0 point 0 and GPU temperatures out loud.");
 });
 
@@ -1759,7 +2218,7 @@ $("#focus-form").addEventListener("submit", (event) => {
 });
 
 $("#focus-listen").onclick = () => {
-  if (store.focus) void toggleListen(store.focus, $("#focus-listen"), $("#focus-audio-source")?.value || "desktop");
+  if (store.focus) void toggleListen(store.focus, $("#focus-audio-source")?.value || "desktop");
 };
 
 $("#focus-mute").onclick = () => {
@@ -1855,10 +2314,11 @@ $("#speak-toggle").onclick = () => {
   localStorage.setItem("athena.speak", store.speak ? "1" : "0");
   if (store.speak) {
     primeVoice();
+    primeServerVoice();
     speak("Voice on.");
-  } else if (speechReady()) {
-    spokenChunks = [];
-    speechSynthesis.cancel();
+  } else {
+    stopBrowserSpeech();
+    stopServerSpeech();
   }
   render();
 };
@@ -2024,7 +2484,7 @@ $("#screen-grid").addEventListener("click", (event) => {
   const listen = event.target.closest("[data-listen]");
   if (listen) {
     const source = card.querySelector("[data-audio-pick]")?.value || "desktop";
-    void toggleListen(id, listen, source);
+    void toggleListen(id, source);
     return;
   }
   const mute = event.target.closest("[data-listen-mute]");
@@ -2140,6 +2600,8 @@ async function saveSettings(overrides = {}) {
     code: $("#cfg-code").value,
     confirmCode: store.lockInfo?.code || "",
     openMode: $("#cfg-open").checked,
+    sessionDays: Number($("#cfg-session-days")?.value) || store.state?.sessionDays || 30,
+    rememberControllers: $("#cfg-remember")?.checked !== false,
     brain: {
       provider: $("#cfg-provider").value,
       model: $("#cfg-model").value,
@@ -2159,8 +2621,36 @@ async function saveSettings(overrides = {}) {
   }
 }
 
+async function saveTtsSettings() {
+  const provider = $("#cfg-tts-provider").value;
+  const body = {
+    tts: {
+      provider,
+      voice: $("#cfg-tts-voice").value.trim(),
+      languageCode: $("#cfg-tts-language").value.trim(),
+      apiKey: $("#cfg-tts-key").value,
+    },
+  };
+  try {
+    const res = await api("/api/settings", { method: "POST", body });
+    store.state = res.state;
+    $("#cfg-tts-key").value = "";
+    render();
+    renderVoicePanel();
+    toast(`Speech provider → ${provider.toUpperCase()}`, 4200);
+  } catch (error) {
+    toast(error.message, 5200);
+  }
+}
+
 $("#cfg-save").onclick = () => saveSettings();
 $("#cfg-save-2").onclick = () => saveSettings();
+$("#cfg-tts-save")?.addEventListener("click", () => void saveTtsSettings());
+$("#cfg-remember")?.addEventListener("change", () => {
+  const days = $("#cfg-session-days");
+  if (days) days.disabled = !$("#cfg-remember").checked;
+  void saveSettings();
+});
 
 $("#cfg-model-pick").addEventListener("change", (event) => {
   const model = event.target.value;
@@ -2171,6 +2661,21 @@ $("#cfg-model-pick").addEventListener("change", (event) => {
 });
 
 $("#sys-devices")?.addEventListener("click", async (event) => {
+  const rename = event.target.closest("[data-device-rename]");
+  if (rename) {
+    const device = (store.state?.devices || []).find((item) => item.id === rename.dataset.deviceRename);
+    if (!device) return;
+    const name = prompt("Name this controller:", device.name);
+    if (!name || !name.trim() || name.trim() === device.name) return;
+    try {
+      await api(`/api/sessions/${encodeURIComponent(device.id)}`, { method: "PATCH", body: { name: name.trim() } });
+      toast("Controller renamed.");
+      await loadState();
+    } catch (error) {
+      toast(error.message, 5200);
+    }
+    return;
+  }
   const button = event.target.closest("[data-device-revoke]");
   if (!button) return;
   const current = button.dataset.deviceRevoke === store.deviceSession;
@@ -2179,8 +2684,9 @@ $("#sys-devices")?.addEventListener("click", async (event) => {
     await api(`/api/sessions/${encodeURIComponent(button.dataset.deviceRevoke)}`, { method: "DELETE" });
     if (current) {
       store.token = "";
+      store.admin = false;
       store.deviceSession = "";
-      localStorage.removeItem("athena.session");
+      clearAuthToken();
       localStorage.removeItem(SESSION_DEVICE_KEY);
       store.stream?.close();
       store.stream = null;
@@ -2200,14 +2706,12 @@ $("#sessions-clear").onclick = async () => {
     const res = await api("/api/sessions", { method: "DELETE" });
     toast(`Signed out ${res.count} device${res.count === 1 ? "" : "s"}.`, 3600);
     store.token = "";
+    store.admin = false;
     store.deviceSession = "";
-    localStorage.removeItem("athena.session");
+    clearAuthToken();
     localStorage.removeItem(SESSION_DEVICE_KEY);
-    /* signing out is also forgetting what was said on this device */
-    localStorage.removeItem(CHAT_KEY);
-    store.chat = [];
-    store.history = [];
-    $$("#chat .msg").forEach((element) => element.remove());
+    /* Revoking sessions is an access change, not a history deletion. The
+       conversation stays on this device until the user clears it explicitly. */
     lock();
   } catch (error) {
     toast(error.message, 5000);
@@ -2231,7 +2735,8 @@ async function localUnlock() {
       line.innerHTML = `THIS PC · CODE <b class="accent">${esc(info.code)}</b>`;
       $("#code").value = info.code;
     }
-    if (store.token) return true;
+    /* Always mint a fresh administrator session on the Hub PC. An older
+       controller token is not silently promoted to administrator. */
     const res = await fetch("/api/session", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -2240,9 +2745,10 @@ async function localUnlock() {
     if (!res.ok) return false;
     const json = await res.json();
     store.token = json.token;
+    store.admin = Boolean(json.admin);
     store.deviceSession = json.device?.id || "";
     if (store.deviceSession) localStorage.setItem(SESSION_DEVICE_KEY, store.deviceSession);
-    localStorage.setItem("athena.session", json.token);
+    saveAuthToken(json.token, true);
     return true;
   } catch {
     return false;
@@ -2259,7 +2765,8 @@ async function sessionStillValid() {
     });
     if (res.status === 401) {
       store.token = "";
-      localStorage.removeItem("athena.session");
+      store.admin = false;
+      clearAuthToken();
       return false;
     }
     return true;
@@ -2271,8 +2778,10 @@ async function sessionStillValid() {
 
 async function boot() {
   applyLook();
+  initializeConversations();
   saveVoiceSetting();
   renderVoicePanel();
+  renderConversationList();
   /* Chrome populates the voice list asynchronously after the first call. */
   setTimeout(renderVoicePanel, 400);
   spawnSparks();

@@ -33,7 +33,7 @@ import {
   StreamTickets,
   applyCors,
   hostAllowed,
-  isLoopback,
+  isDirectLocalRequest,
   originAllowed,
   readJsonBody,
 } from "./lib/security.mjs";
@@ -50,18 +50,28 @@ const JOBS_FILE = path.join(DATA, "jobs.json");
 const INTEGRATIONS_FILE = path.join(DATA, "integrations.json");
 const CODE_FILE = path.join(DATA, "access-code.txt");
 const STARTED_AT = nowIso();
-/* A phone stays unlocked for a month, then asks for the code again. */
-const SESSION_DAYS = 30;
+/* A controller stays unlocked for a month by default. The Hub administrator
+   can shorten this or stop remembering new controller sessions at all. */
+const DEFAULT_SESSION_DAYS = 30;
+const MAX_SESSION_DAYS = 365;
 
 const DEFAULTS = {
   hubName: os.hostname().replace(/\.local$/i, "").toLowerCase() || "athena",
   port: 4790,
   code: "",
   openMode: false,
+  sessionDays: DEFAULT_SESSION_DAYS,
+  rememberControllers: true,
   brain: {
     provider: "auto",
     model: "",
     baseUrl: "",
+    apiKey: "",
+  },
+  tts: {
+    provider: "browser",
+    languageCode: "en-US",
+    voice: "en-US-Neural2-F",
     apiKey: "",
   },
 };
@@ -71,7 +81,10 @@ const config = {
   ...DEFAULTS,
   ...savedConfig,
   brain: { ...DEFAULTS.brain, ...(savedConfig.brain || {}) },
+  tts: { ...DEFAULTS.tts, ...(savedConfig.tts || {}) },
 };
+config.sessionDays = clamp(Math.round(Number(config.sessionDays) || DEFAULT_SESSION_DAYS), 1, MAX_SESSION_DAYS);
+config.rememberControllers = config.rememberControllers !== false;
 if (!config.code) config.code = accessCode(6);
 if (process.env.PORT) config.port = Number(process.env.PORT) || config.port;
 if (!fs.existsSync(CONFIG_FILE)) writeJson(CONFIG_FILE, config);
@@ -102,10 +115,10 @@ const brainInstaller = createBrainInstaller({
     Object.assign(config.brain, patch);
     invalidateProbeCache();
     saveConfig();
-    void hubState().then((state) => broadcast("state", state));
+    void hubState(true).then((state) => broadcast("state", state));
   },
   onDone: () => {
-    void hubState().then((state) => broadcast("state", state));
+    void hubState(true).then((state) => broadcast("state", state));
   },
 });
 
@@ -138,6 +151,9 @@ function normalizeSession(token, value) {
       clientId: value.clientId ? String(value.clientId).slice(0, 80) : null,
       createdAt: value.createdAt || value.lastSeen || null,
       lastSeen: value.lastSeen || value.createdAt || null,
+      role: value.role === "admin" ? "admin" : "controller",
+      remember: value.remember !== false,
+      customName: Boolean(value.customName),
       legacy: Boolean(value.legacy),
     };
   }
@@ -148,6 +164,9 @@ function normalizeSession(token, value) {
     clientId: null,
     createdAt: value || null,
     lastSeen: value || null,
+    role: "controller",
+    remember: true,
+    customName: false,
     legacy: true,
   };
 }
@@ -156,9 +175,9 @@ const sessions = new Map(
   Object.entries(readJson(SESSIONS_FILE, {})).map(([token, value]) => [token, normalizeSession(token, value)])
 );
 
-/** Drops sessions that have not been used in SESSION_DAYS. */
+/** Drops sessions that have not been used in the configured number of days. */
 function pruneSessions() {
-  const cutoff = Date.now() - SESSION_DAYS * 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - config.sessionDays * 24 * 60 * 60 * 1000;
   let changed = false;
   for (const [token, session] of sessions) {
     const at = Date.parse(session.lastSeen || session.createdAt);
@@ -176,13 +195,25 @@ function saveKeys() {
   writeJson(KEYS_FILE, { keys });
 }
 function saveSessions() {
-  writeJson(SESSIONS_FILE, Object.fromEntries(sessions));
+  /* Unremembered controller sessions live only in memory, so a Hub restart
+     signs them out. Existing remembered sessions are never discarded by a
+     config change. */
+  writeJson(SESSIONS_FILE, Object.fromEntries([...sessions].filter(([, session]) => session.remember !== false)));
 }
 
 /** Public device list: metadata only. Never a token or a code. */
 function deviceList() {
   return [...sessions.values()]
-    .map(({ id, name, platform, createdAt, lastSeen, legacy }) => ({ id, name, platform, createdAt, lastSeen, legacy: Boolean(legacy) }))
+    .map(({ id, name, platform, createdAt, lastSeen, legacy, role, remember }) => ({
+      id,
+      name,
+      platform,
+      createdAt,
+      lastSeen,
+      role: role === "admin" ? "admin" : "controller",
+      remember: remember !== false,
+      legacy: Boolean(legacy),
+    }))
     .sort((a, b) => String(b.lastSeen || "").localeCompare(String(a.lastSeen || "")));
 }
 
@@ -224,32 +255,55 @@ function presentedSecret(req) {
 }
 
 function authenticate(req) {
-  if (config.openMode) return { ok: true, via: "open" };
   const secret = presentedSecret(req);
-  if (!secret) return { ok: false };
-  const hash = sha256(secret);
-  const key = keys.find((item) => safeEqual(item.hash, hash));
-  if (key) {
-    key.lastUsed = nowIso();
-    saveKeys();
-    return { ok: true, via: "key", key };
-  }
-  const session = sessions.get(secret);
-  if (session) {
-    const seen = Date.parse(session.lastSeen || session.createdAt);
-    if (!Number.isFinite(seen) || Date.now() - seen > SESSION_DAYS * 24 * 60 * 60 * 1000) {
-      sessions.delete(secret);
-      saveSessions();
-      return { ok: false };
+  if (secret) {
+    const hash = sha256(secret);
+    const key = keys.find((item) => safeEqual(item.hash, hash));
+    if (key) {
+      key.lastUsed = nowIso();
+      saveKeys();
+      /* An API key can operate nodes, but it is not the Hub administrator
+         interface and cannot manage controllers or Hub settings. */
+      return { ok: true, via: "key", key, admin: false };
     }
-    /* cheap touch: only rewrite the file once an hour */
-    if (Date.now() - seen > 60 * 60 * 1000) {
-      session.lastSeen = nowIso();
-      saveSessions();
+    const session = sessions.get(secret);
+    if (session) {
+      const seen = Date.parse(session.lastSeen || session.createdAt);
+      if (!Number.isFinite(seen) || Date.now() - seen > config.sessionDays * 24 * 60 * 60 * 1000) {
+        sessions.delete(secret);
+        saveSessions();
+        return { ok: false };
+      }
+      /* cheap touch: only rewrite the file once an hour */
+      if (Date.now() - seen > 60 * 60 * 1000) {
+        session.lastSeen = nowIso();
+        saveSessions();
+      }
+      /* An administrator token is not a portable LAN credential. Replaying it
+         through a proxy or a LAN hostname downgrades it to a controller. */
+      const admin = session.role === "admin" && isDirectLocalRequest(req);
+      return { ok: true, via: "session", session, admin };
     }
-    return { ok: true, via: "session", session };
   }
-  return { ok: false };
+  /* Open mode removes the code requirement for ordinary controller work. It
+     does not turn every caller into the Hub administrator. */
+  if (config.openMode) return { ok: true, via: "open", admin: false };
+  return { ok: false, admin: false };
+}
+
+/** Admin routes need a session minted by the Hub itself, not just any valid
+    controller session, API key or open-mode caller. */
+function requireAdmin(req, res) {
+  const auth = req.athenaAuth || authenticate(req);
+  if (!auth.ok) {
+    json(res, 401, { error: "Locked." });
+    return null;
+  }
+  if (!auth.admin || !isDirectLocalRequest(req)) {
+    json(res, 403, { error: "Only the Hub administrator can do that. Open ATHENA on the Hub PC." });
+    return null;
+  }
+  return auth;
 }
 
 /* --------------------------------------------------------------- responses */
@@ -322,13 +376,37 @@ function serveStatic(req, res, pathname) {
 
 /* ------------------------------------------------------------------ events */
 
-const listeners = new Set();
+const listeners = new Map();
+
+/** Controller SSE clients never receive the administrator's device/key data. */
+function stateFor(base, admin) {
+  const tts = {
+    provider: config.tts.provider,
+    voice: config.tts.voice,
+    languageCode: config.tts.languageCode,
+    configured: Boolean(config.tts.apiKey),
+  };
+  return {
+    ...base,
+    admin,
+    ...(admin
+      ? {
+          keys: keys.map(({ id, label, prefix, createdAt, lastUsed }) => ({ id, label, prefix, createdAt, lastUsed })),
+          sessions: sessions.size,
+          devices: deviceList(),
+          sessionDays: config.sessionDays,
+          rememberControllers: config.rememberControllers,
+          tts,
+        }
+      : { keys: [], sessions: null, devices: [], sessionDays: null, rememberControllers: config.rememberControllers, tts }),
+  };
+}
 
 function broadcast(event, data) {
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const res of listeners) {
+  for (const [res, meta] of listeners) {
     try {
-      res.write(payload);
+      const outgoing = event === "state" ? stateFor(data, meta.admin) : data;
+      res.write(`event: ${event}\ndata: ${JSON.stringify(outgoing)}\n\n`);
     } catch {
       listeners.delete(res);
     }
@@ -339,10 +417,10 @@ jobs.onChange((job) => broadcast("job", job));
 
 let lastStateJson = "";
 
-async function hubState() {
+async function hubState(admin = false) {
   const nodes = registry.list();
   const brain = await probeBrain(config.brain);
-  return {
+  const base = {
     hub: {
       name: config.hubName,
       version: VERSION,
@@ -355,25 +433,32 @@ async function hubState() {
     nodes,
     jobs: jobs.list(20),
     integrations: integrations.list(),
-    keys: keys.map(({ id, label, prefix, createdAt, lastUsed }) => ({ id, label, prefix, createdAt, lastUsed })),
-    sessions: sessions.size,
-    devices: deviceList(),
-    sessionDays: SESSION_DAYS,
     brain,
     platform: `${os.type()} ${os.release()}`,
     uptimeSec: Math.round(process.uptime()),
     time: nowIso(),
   };
+  return stateFor(base, admin);
 }
 
 function isOpen() {
   return config.openMode;
 }
 
+function actorLabel(auth) {
+  if (auth?.key) return `API key “${auth.key.label}”`;
+  if (auth?.session) return `${auth.admin ? "Hub administrator" : "Controller"} “${auth.session.name}”`;
+  if (auth?.via === "open") return "open mode (no key)";
+  return null;
+}
+
 async function tick() {
   if (registry.nodes.length) {
     await registry.refresh().catch(() => undefined);
-    const state = await hubState();
+    /* Build the complete state, then let each SSE listener's role redact it.
+       Using a controller-shaped state here stripped devices and keys from the
+       administrator's own live updates. */
+    const state = await hubState(true);
     const serialised = JSON.stringify({ nodes: state.nodes, jobs: state.jobs.slice(0, 5) });
     if (serialised !== lastStateJson) {
       lastStateJson = serialised;
@@ -414,7 +499,7 @@ const server = http.createServer(async (req, res) => {
     /* Stopping and restarting from the app, so a black window is not the only
        way to control the thing. Only reachable with a session or the code. */
     if ((route === "/api/hub/shutdown" || route === "/api/hub/restart") && method === "POST") {
-      if (!authenticate(req).ok) return json(res, 401, { error: "Locked." });
+      if (!requireAdmin(req, res)) return;
       const restart = route.endsWith("restart");
       json(res, 200, { ok: true, restarting: restart, stopping: !restart });
       log(restart ? "restart requested from the app" : "stop requested from the app");
@@ -432,7 +517,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === "/api/lock" && method === "GET") {
-      const local = isLoopback(req);
+      const local = isDirectLocalRequest(req);
       /* Loopback alone is not proof: a local web page could reach this port.
          The app sends the explicit intent header, which a cross-origin page
          cannot add without a preflight we refuse. */
@@ -456,40 +541,62 @@ const server = http.createServer(async (req, res) => {
       if (Date.now() - recent.at > 60_000) recent.count = 0;
       if (recent.count >= 8) return json(res, 429, { error: "Too many attempts. Wait a minute." });
       const given = String(body.code || "").trim().toUpperCase();
-      const fromThisPc = body.local === true && isLoopback(req);
+      /* body.local is only an intent hint. The role is granted from the
+         directly-connected loopback request, never from the JSON body. */
+      const fromThisPc = body.local === true && isDirectLocalRequest(req);
       if (config.openMode || fromThisPc || given === String(config.code).toUpperCase()) {
         const token = randomToken(20);
         const clientId = String(body.deviceId || "").trim().slice(0, 80) || null;
         const name = String(body.deviceName || "").trim().slice(0, 48) || deviceLabel(req);
         const platform = String(body.platform || req.headers["user-agent"] || "").slice(0, 160);
+        /* Only a session minted by the Hub PC itself is administrative. A
+           controller that guesses or knows the access code is still a
+           controller. */
+        const role = fromThisPc ? "admin" : "controller";
+        const remember = role === "admin" ? true : config.rememberControllers !== false;
         /* Signing in again on the same browser replaces that device's old
-           session; other phones, tablets and PCs keep theirs untouched. */
+           session; other phones, tablets and PCs keep theirs untouched. A
+           name chosen by the Hub administrator survives that sign-in. */
+        let prior = null;
         if (clientId) {
           for (const [oldToken, oldSession] of sessions) {
-            if (oldSession.clientId && oldSession.clientId === clientId) sessions.delete(oldToken);
+            if (oldSession.clientId && oldSession.clientId === clientId) {
+              prior = oldSession;
+              sessions.delete(oldToken);
+            }
           }
         }
         const session = {
           id: newId("device"),
-          name,
+          name: prior?.customName ? prior.name : name,
           platform: clientId ? platform : deviceLabel(req),
           clientId,
           createdAt: nowIso(),
           lastSeen: nowIso(),
+          role,
+          remember,
+          customName: Boolean(prior?.customName),
           legacy: false,
         };
         sessions.set(token, session);
         saveSessions();
         failures.delete(ip);
-        log(`session opened from ${ip} (${name})`);
-        return json(res, 200, { ok: true, token, device: { ...session, platform: session.platform } });
+        log(`session opened from ${ip} (${name}, ${role})`);
+        void hubState(true).then((state) => broadcast("state", state));
+        return json(res, 200, { ok: true, token, remember, admin: role === "admin", device: { ...session, platform: session.platform } });
       }
       failures.set(ip, { count: recent.count + 1, at: Date.now() });
       return json(res, 401, { error: "That code does not match. It is printed in the hub window." });
     }
 
     if (route === "/api/events") {
-      if (!authenticate(req).ok && !tickets.valid(url.searchParams.get("ticket"))) return json(res, 401, { error: "Locked." });
+      const auth = authenticate(req);
+      const ticket = tickets.get(url.searchParams.get("ticket"));
+      /* An administrator ticket is still only an administrator audience on a
+         direct local connection. A copied ticket viewed through the LAN gets
+         the controller-shaped stream. */
+      const admin = Boolean(auth.admin || (ticket?.admin && isDirectLocalRequest(req)));
+      if (!auth.ok && !ticket) return json(res, 401, { error: "Locked." });
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-store",
@@ -497,8 +604,8 @@ const server = http.createServer(async (req, res) => {
         "X-Accel-Buffering": "no",
       });
       res.write("retry: 4000\n\n");
-      res.write(`event: state\ndata: ${JSON.stringify(await hubState())}\n\n`);
-      listeners.add(res);
+      res.write(`event: state\ndata: ${JSON.stringify(await hubState(admin))}\n\n`);
+      listeners.set(res, { admin });
       const beat = setInterval(() => {
         try {
           res.write(": ping\n\n");
@@ -520,7 +627,9 @@ const server = http.createServer(async (req, res) => {
          scoped stream ticket instead of a session token. Nothing else can. */
       const streamRoute = route === "/api/events" || /\/audio$/.test(route);
       const ticketOk = streamRoute && tickets.valid(url.searchParams.get("ticket"));
-      if (!authenticate(req).ok && !ticketOk) {
+      const auth = authenticate(req);
+      req.athenaAuth = auth;
+      if (!auth.ok && !ticketOk) {
         return json(res, 401, {
           error: "ATHENA is locked. Send x-athena-key, Authorization: Bearer <api key>, or unlock with the 6-character code.",
           locked: true,
@@ -535,10 +644,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === "/api/integrations" && method === "POST") {
+      if (!requireAdmin(req, res)) return;
       const body = await readBody(req);
       try {
         const integration = integrations.add(body);
-        broadcast("state", await hubState());
+        broadcast("state", await hubState(true));
         return json(res, 200, { ok: true, integration });
       } catch (error) {
         return json(res, 400, { error: String(error?.message || error) });
@@ -548,10 +658,11 @@ const server = http.createServer(async (req, res) => {
     const integrationMatch = route.match(/^\/api\/integrations\/([^/]+)(\/probe)?$/);
     if (integrationMatch) {
       const id = decodeURIComponent(integrationMatch[1]);
+      if (method !== "GET" && !requireAdmin(req, res)) return;
       if (integrationMatch[2] && method === "POST") {
         try {
           const integration = await integrations.probe(id);
-          broadcast("state", await hubState());
+          broadcast("state", await hubState(true));
           return json(res, 200, { ok: true, integration });
         } catch (error) {
           return json(res, 400, { error: String(error?.message || error) });
@@ -562,7 +673,7 @@ const server = http.createServer(async (req, res) => {
         try {
           const integration = integrations.update(id, body);
           if (!integration) return json(res, 404, { error: "No such integration." });
-          broadcast("state", await hubState());
+          broadcast("state", await hubState(true));
           return json(res, 200, { ok: true, integration });
         } catch (error) {
           return json(res, 400, { error: String(error?.message || error) });
@@ -570,7 +681,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (method === "DELETE") {
         if (!integrations.remove(id)) return json(res, 404, { error: "No such integration." });
-        broadcast("state", await hubState());
+        broadcast("state", await hubState(true));
         return json(res, 200, { ok: true });
       }
       const found = integrations.get(id);
@@ -579,12 +690,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === "/api/stream-ticket" && method === "POST") {
-      return json(res, 200, { ok: true, ...tickets.issue("stream") });
+      const auth = req.athenaAuth || authenticate(req);
+      return json(res, 200, { ok: true, ...tickets.issue("stream", { admin: Boolean(auth.admin) }) });
     }
 
-    if (route === "/api/state") return json(res, 200, await hubState());
+    if (route === "/api/state") return json(res, 200, await hubState(Boolean(req.athenaAuth?.admin)));
 
     if (route === "/api/scan" && method === "POST") {
+      if (!requireAdmin(req, res)) return;
       const found = await discover();
       const linked = new Set(registry.nodes.map((node) => node.id));
       return json(res, 200, {
@@ -602,11 +715,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === "/api/nodes/pair" && method === "POST") {
+      if (!requireAdmin(req, res)) return;
       const body = await readBody(req);
       try {
         const node = await registry.pair({ ...body, name: config.hubName });
         await registry.refresh(node.id);
-        broadcast("state", await hubState());
+        broadcast("state", await hubState(true));
         return json(res, 200, { ok: true, node });
       } catch (error) {
         return json(res, 400, { error: String(error?.message || error) });
@@ -625,8 +739,9 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (rest === "" && method === "DELETE") {
+        if (!requireAdmin(req, res)) return;
         registry.remove(node.id);
-        broadcast("state", await hubState());
+        broadcast("state", await hubState(true));
         return json(res, 200, { ok: true });
       }
 
@@ -648,14 +763,14 @@ const server = http.createServer(async (req, res) => {
       if (rest === "/exec" && method === "POST") {
         const body = await readBody(req);
         if (!body.command) return json(res, 400, { error: "Give a command." });
-        const auth = authenticate(req);
+        const auth = req.athenaAuth || authenticate(req);
         const job = jobs.create({
           node: node.id,
           op: "run",
           args: { command: String(body.command), timeoutSec: clamp(body.timeoutSec || 900, 5, 7200) },
           label: String(body.command).split("\n")[0].slice(0, 120),
           source: String(body.source || (route.startsWith("/v1/") ? "api" : "hub")),
-          createdBy: auth.key ? `API key “${auth.key.label}”` : auth.via === "session" ? "signed-in app session" : auth.via === "open" ? "open mode (no key)" : null,
+          createdBy: actorLabel(auth),
         });
         if (body.wait === false) return json(res, 202, { ok: true, job });
         return json(res, 200, { ok: true, job: await waitFor(job.id, Number(body.waitSec) || 120) });
@@ -678,16 +793,20 @@ const server = http.createServer(async (req, res) => {
 
       if (rest === "/screen" && method === "GET") {
         try {
-          const buffer = await registry.screen(node.id, {
+          const frame = await registry.screenFrame(node.id, {
             fps: url.searchParams.get("fps"),
             width: url.searchParams.get("width"),
           });
           res.writeHead(200, {
             "Content-Type": "image/jpeg",
-            "Content-Length": buffer.length,
+            "Content-Length": frame.buffer.length,
             "Cache-Control": "no-store",
+            "X-Athena-Capture-Fps": String(frame.metrics.captureFps || 0),
+            "X-Athena-Capture-Ms": String(frame.metrics.captureMs || 0),
+            "X-Athena-Frame-Age-Ms": String(Math.max(0, Date.now() - frame.at)),
+            "X-Athena-Node-Ms": String(frame.metrics.nodeMs || 0),
           });
-          return res.end(buffer);
+          return res.end(frame.buffer);
         } catch (error) {
           return json(res, 502, { error: String(error?.message || error) });
         }
@@ -791,7 +910,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const node = registry.get(body.node);
       if (!node) return json(res, 400, { error: `No node called "${body.node}".` });
-      const auth = authenticate(req);
+      const auth = req.athenaAuth || authenticate(req);
       if (body.op && body.op !== "run" && body.op !== "exec") {
         const job = jobs.create({
           node: node.id,
@@ -799,7 +918,7 @@ const server = http.createServer(async (req, res) => {
           args: body.args || {},
           label: body.label,
           source: "hub",
-          createdBy: auth.key ? `API key “${auth.key.label}”` : "this Hub's app",
+          createdBy: actorLabel(auth),
         });
         return json(res, 202, { ok: true, job });
       }
@@ -810,7 +929,7 @@ const server = http.createServer(async (req, res) => {
         args: { command: String(body.command), timeoutSec: clamp(body.timeoutSec || 900, 5, 7200) },
         label: body.label || String(body.command).split("\n")[0].slice(0, 120),
         source: "hub",
-        createdBy: auth.key ? `API key “${auth.key.label}”` : "this Hub's app",
+        createdBy: actorLabel(auth),
       });
       return json(res, 202, { ok: true, job });
     }
@@ -830,51 +949,110 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const text = String(body.text || "").trim();
       if (!text) return json(res, 400, { error: "Ask me something." });
+      const startedAt = Date.now();
       const wantsStream = Boolean(body.stream);
-      let sentAny = false;
+      let heartbeat = null;
+      const send = (event) => {
+        if (res.writableEnded || res.destroyed) return false;
+        return res.write(JSON.stringify(event) + "\n");
+      };
       const onToken = wantsStream
         ? (piece) => {
-            if (res.writableEnded || res.destroyed) return;
-            if (!sentAny) {
-              /* Headers go out with the first token, so the phone can paint the
-                 bubble before the sentence is finished. */
-              sentAny = true;
-              res.writeHead(200, {
-                "content-type": "application/x-ndjson; charset=utf-8",
-                "cache-control": "no-store",
-                "x-accel-buffering": "no",
-              });
-            }
-            res.write(JSON.stringify({ type: "token", text: piece }) + "\n");
+            send({ type: "token", text: piece });
           }
         : null;
 
-      const answer = await ask({
-        text,
-        /* Provider configuration is owned by the hub. A caller may ask a
-           question; it may not point the brain at another host. */
-        config,
-        registry,
-        history: body.history || [],
-        admin: brainInstaller,
-        onToken,
-      });
-      /* Screenshots are for the client that asked; a base64 JPEG does not
-         belong in a broadcast every device receives. */
-      const { images: _images, ...broadcastable } = answer;
-      broadcast("chat", { at: nowIso(), text, ...broadcastable });
+      if (wantsStream) {
+        /* Open the stream immediately. Waiting for the first model token made
+           a slow provider look like a dead connection and left the UI on "…". */
+        res.writeHead(200, {
+          "content-type": "application/x-ndjson; charset=utf-8",
+          "cache-control": "no-store",
+          "x-accel-buffering": "no",
+        });
+        send({ type: "status", state: "thinking", text: "ATHENA is thinking…" });
+        heartbeat = setInterval(() => send({ type: "status", state: "waiting", elapsedSec: Math.round((Date.now() - startedAt) / 1000) }), 8000);
+        heartbeat.unref?.();
+        res.on("close", () => clearInterval(heartbeat));
+      }
+
+      let answer;
+      try {
+        answer = await ask({
+          text,
+          /* Provider configuration is owned by the hub. A caller may ask a
+             question; it may not point the brain at another host. */
+          config,
+          registry,
+          history: body.history || [],
+          /* Only the Hub administrator may install or upgrade the brain. A
+             controller may ask questions; it may not manage the Hub's model. */
+          admin: req.athenaAuth?.admin ? brainInstaller : null,
+          onToken,
+        });
+      } catch (error) {
+        answer = {
+          reply: `ATHENA could not answer: ${String(error?.message || error).slice(0, 300)}`,
+          actions: [],
+          images: [],
+          provider: "error",
+          model: null,
+          error: String(error?.message || error),
+        };
+      } finally {
+        clearInterval(heartbeat);
+      }
+      /* Conversations are independent per controller. A reply is returned only
+         to the caller, never broadcast to every connected device. */
       if (answer.meta) log(`ask ${answer.meta.ms}ms · ${answer.meta.path}${answer.meta.tools?.length ? " · " + answer.meta.tools.join(",") : ""}`);
       if (wantsStream) {
-        if (!sentAny) {
-          res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" });
-        }
-        res.end(JSON.stringify({ type: "done", ...answer }) + "\n");
-        return;
+        send({ type: "done", ...answer });
+        return res.end();
       }
-      return json(res, 200, answer);
+      return json(res, answer.error && !answer.reply ? 502 : 200, answer);
+    }
+
+    if (route === "/api/tts" && method === "POST") {
+      if (config.tts.provider === "off") return json(res, 409, { error: "Spoken replies are switched off on the Hub." });
+      if (config.tts.provider !== "google") {
+        return json(res, 409, { error: "This Hub is configured for browser speech, not server speech.", provider: config.tts.provider });
+      }
+      if (!config.tts.apiKey) return json(res, 503, { error: "Google Cloud TTS is selected but no API key is saved on the Hub." });
+      const body = await readBody(req);
+      const text = String(body.text || "").trim();
+      if (!text) return json(res, 400, { error: "Nothing to speak." });
+      if (text.length > 2000) return json(res, 400, { error: "That is too much text for one spoken reply." });
+      try {
+        const upstream = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(config.tts.apiKey)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            input: { text },
+            voice: { languageCode: config.tts.languageCode, name: config.tts.voice },
+            audioConfig: { audioEncoding: "MP3" },
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        const payload = await upstream.json().catch(() => ({}));
+        if (!upstream.ok || !payload.audioContent) {
+          const reason = payload?.error?.message || `Google TTS HTTP ${upstream.status}`;
+          return json(res, 502, { error: `The configured voice failed: ${String(reason).slice(0, 300)}` });
+        }
+        const audio = Buffer.from(payload.audioContent, "base64");
+        res.writeHead(200, {
+          "Content-Type": "audio/mpeg",
+          "Content-Length": audio.length,
+          "Cache-Control": "no-store",
+          "X-Athena-TTS": "google",
+        });
+        return res.end(audio);
+      } catch (error) {
+        return json(res, 502, { error: `The configured voice failed: ${String(error?.message || error).slice(0, 300)}` });
+      }
     }
 
     if (route === "/api/keys" && method === "POST") {
+      if (!requireAdmin(req, res)) return;
       const body = await readBody(req);
       const label = String(body.label || "tool").slice(0, 40);
       const secret = "ath_" + randomToken(18);
@@ -892,6 +1070,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route.startsWith("/api/keys/") && method === "DELETE") {
+      if (!requireAdmin(req, res)) return;
       const id = decodeURIComponent(route.replace("/api/keys/", ""));
       const before = keys.length;
       const filtered = keys.filter((item) => item.id !== id);
@@ -903,28 +1082,50 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === "/api/sessions" && method === "GET") {
-      return json(res, 200, { ok: true, devices: deviceList(), sessionDays: SESSION_DAYS });
+      if (!requireAdmin(req, res)) return;
+      return json(res, 200, { ok: true, devices: deviceList(), sessionDays: config.sessionDays, rememberControllers: config.rememberControllers });
+    }
+
+    if (route.startsWith("/api/sessions/") && ["PATCH", "PUT"].includes(method)) {
+      if (!requireAdmin(req, res)) return;
+      const id = decodeURIComponent(route.slice("/api/sessions/".length));
+      const body = await readBody(req);
+      const name = String(body.name || "").trim().slice(0, 48);
+      if (!name) return json(res, 400, { error: "Give the controller a name." });
+      const found = [...sessions.values()].find((session) => session.id === id);
+      if (!found) return json(res, 404, { error: "No such controller session." });
+      found.name = name;
+      found.customName = true;
+      saveSessions();
+      log(`controller renamed: ${name}`);
+      broadcast("state", await hubState(true));
+      return json(res, 200, { ok: true, device: deviceList().find((device) => device.id === id) });
     }
 
     if (route.startsWith("/api/sessions/") && method === "DELETE") {
+      if (!requireAdmin(req, res)) return;
       const id = decodeURIComponent(route.slice("/api/sessions/".length));
       const found = [...sessions.entries()].find(([, session]) => session.id === id);
       if (!found) return json(res, 404, { error: "No such device session." });
       sessions.delete(found[0]);
       saveSessions();
       log(`device session revoked: ${found[1].name}`);
+      void hubState(true).then((state) => broadcast("state", state));
       return json(res, 200, { ok: true, id });
     }
 
     if (route === "/api/sessions" && method === "DELETE") {
+      if (!requireAdmin(req, res)) return;
       const count = sessions.size;
       sessions.clear();
       saveSessions();
       log(`signed out ${count} device${count === 1 ? "" : "s"}`);
+      void hubState(true).then((state) => broadcast("state", state));
       return json(res, 200, { ok: true, count });
     }
 
     if (route === "/api/settings" && method === "POST") {
+      if (!requireAdmin(req, res)) return;
       const body = await readBody(req);
       const nextCode = typeof body.code === "string" ? body.code.trim().toUpperCase() : "";
       const wantsOpen = typeof body.openMode === "boolean" && body.openMode !== config.openMode;
@@ -934,7 +1135,7 @@ const server = http.createServer(async (req, res) => {
          phone session may do. It needs the machine itself and the current
          code as a fresh proof of ownership. */
       if (wantsOpen || wantsCode) {
-        const confirmed = isLoopback(req) && String(body.confirmCode || "").trim().toUpperCase() === String(config.code).toUpperCase();
+        const confirmed = isDirectLocalRequest(req) && String(body.confirmCode || "").trim().toUpperCase() === String(config.code).toUpperCase();
         if (!confirmed) {
           return json(res, 403, { error: "Open mode and code changes require this PC and the current access code." });
         }
@@ -946,6 +1147,14 @@ const server = http.createServer(async (req, res) => {
       }
       if (typeof body.hubName === "string" && body.hubName.trim()) config.hubName = body.hubName.trim().slice(0, 40);
       if (typeof body.openMode === "boolean") config.openMode = body.openMode;
+      if (body.sessionDays !== undefined) {
+        const days = Math.round(Number(body.sessionDays));
+        if (!Number.isFinite(days) || days < 1 || days > MAX_SESSION_DAYS) {
+          return json(res, 400, { error: `Controller remembering must be 1–${MAX_SESSION_DAYS} days.` });
+        }
+        config.sessionDays = days;
+      }
+      if (typeof body.rememberControllers === "boolean") config.rememberControllers = body.rememberControllers;
 
       if (body.brain !== undefined) {
         if (!body.brain || typeof body.brain !== "object" || Array.isArray(body.brain)) {
@@ -956,9 +1165,13 @@ const server = http.createServer(async (req, res) => {
           return json(res, 400, { error: `Unknown provider "${provider}".` });
         }
         config.brain.provider = provider;
-        for (const field of ["model", "apiKey"]) {
-          if (field in body.brain) config.brain[field] = String(body.brain[field] ?? "").trim();
+        if ("model" in body.brain) config.brain.model = String(body.brain.model ?? "").trim();
+        /* A blank password field means "leave the saved key alone". Saving an
+           unrelated setting used to erase the provider key. */
+        if ("apiKey" in body.brain && String(body.brain.apiKey ?? "").trim()) {
+          config.brain.apiKey = String(body.brain.apiKey).trim();
         }
+        if (body.brain.clearApiKey === true) config.brain.apiKey = "";
         if ("baseUrl" in body.brain) {
           const baseUrl = String(body.brain.baseUrl ?? "").trim();
           if (baseUrl) {
@@ -976,11 +1189,27 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      if (body.tts !== undefined) {
+        if (!body.tts || typeof body.tts !== "object" || Array.isArray(body.tts)) {
+          return json(res, 400, { error: "tts must be an object." });
+        }
+        const provider = String(body.tts.provider ?? config.tts.provider).trim().toLowerCase();
+        if (!["browser", "google", "off"].includes(provider)) {
+          return json(res, 400, { error: `Unknown speech provider "${provider}".` });
+        }
+        config.tts.provider = provider;
+        if ("voice" in body.tts) config.tts.voice = String(body.tts.voice ?? "").trim().slice(0, 80) || DEFAULTS.tts.voice;
+        if ("languageCode" in body.tts) config.tts.languageCode = String(body.tts.languageCode ?? "").trim().slice(0, 20) || DEFAULTS.tts.languageCode;
+        if ("apiKey" in body.tts && String(body.tts.apiKey ?? "").trim()) config.tts.apiKey = String(body.tts.apiKey).trim();
+        if (body.tts.clearApiKey === true) config.tts.apiKey = "";
+      }
+
       invalidateProbeCache();
       saveConfig();
-      broadcast("state", await hubState());
+      pruneSessions();
+      broadcast("state", await hubState(true));
       prewarm();
-      return json(res, 200, { ok: true, state: await hubState() });
+      return json(res, 200, { ok: true, state: await hubState(true) });
     }
 
     if (route === "/api/brain") {
@@ -988,15 +1217,18 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === "/api/brain/install" && method === "GET") {
+      if (!requireAdmin(req, res)) return;
       return json(res, 200, brainInstaller.status());
     }
 
     if (route === "/api/brain/install" && method === "POST") {
+      if (!requireAdmin(req, res)) return;
       const body = await readBody(req);
       return json(res, 200, brainInstaller.start("install", { vision: Boolean(body.vision) }));
     }
 
     if (route === "/api/brain/upgrade" && method === "POST") {
+      if (!requireAdmin(req, res)) return;
       const body = await readBody(req);
       return json(res, 200, brainInstaller.start("upgrade", { vision: Boolean(body.vision) }));
     }
