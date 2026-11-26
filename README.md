@@ -184,15 +184,17 @@ The key is stored **only** in `athena/data/config.json` on the hub. It is never
 sent to the browser. The app shows you which brain is live; if it is not ready,
 ATHENA still understands `status`, `run <command>`, `start comfy`, `scan`.
 
-The model is given eight tools — `list_nodes`, `node_status`, `node_processes`,
+The model is given ten tools — `list_nodes`, `node_status`, `node_processes`,
 `run_command`, `node_action`, `manage_brain`, `see_screen`,
-`control_mouse_keyboard` — and a description of every machine's CPU, installed /
-usable / available RAM, GPU, VRAM, disks, displays, audio, OS, installed apps,
-temperature and services. Specifications, GPU status, installed applications
+`control_mouse_keyboard`, `browser_control`, `window_control` — and a
+description of every machine's CPU, installed / usable / available RAM, GPU,
+VRAM, disks, displays, audio, OS, installed apps, temperature and services. Specifications, GPU status, installed applications
 and "which Node has the most available RAM?" are answered directly from measured
 Node values (read-only for controllers), without asking a model to invent them. It keeps tools available across the steps of a
-multi-step request, reads each result, and asks before guessing when a target is
-ambiguous. Shell commands are available only to the direct-local Hub
+multi-step request, reads each result, avoids repeating a step that already
+succeeded, verifies the outcome, and asks before guessing when a target is
+ambiguous. Browser actions attach a fresh screenshot as evidence, and a failed
+step is reported as failed instead of being dressed up as success. Shell commands are available only to the direct-local Hub
 administrator; controllers can still inspect machines, open apps and use the
 screen. Ask in plain language:
 
@@ -202,6 +204,8 @@ screen. Ask in plain language:
 - "install ComfyUI-Manager on the render node"
 - "which machine has the most free VRAM?"
 - "speak 'render complete' on the render pc" (Windows SAPI voice)
+- "open youtube on the laptop, search for lofi, play the first video"
+- "focus the CapCut window on the render pc, then close it"
 
 ---
 
@@ -396,6 +400,11 @@ athena/
   working, and jobs survive the phone locking.
 - Screen view and remote control are **Windows only** (the node uses
   PowerShell + user32). Status, commands, ComfyUI and the API work anywhere.
+- Browser control launches a **separate controlled profile** of an installed
+  Chrome, Edge or Brave. It leaves the person's normal browser alone and closes
+  only its own instance through CDP. A Node without one of those browsers fails
+  explicitly. Typing and clicking are verified against the live page; this is
+  not a claim that every site behaves well.
 - Screen is polled JPEG, not a video stream. Targets are 30 fps focused and
   10–12 fps in previews, but real capture cost and the network decide. The badge
   reports browser FPS (B), Node capture FPS (C) and round-trip latency
