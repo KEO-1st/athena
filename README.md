@@ -55,32 +55,25 @@ Closing it stops ATHENA for everyone. If you close it, start it again.
 
 ## 2 · Turn the other PC into a node
 
-Copy the **whole `dist/ATHENA-Node-0.1.1`** folder to the render PC (build it
-with `npm run package:node`), then:
+The Node is its own product and repository:
+[**KEO-1st/athena-node**](https://github.com/KEO-1st/athena-node). Download
+`ATHENA-Node-Setup.exe` (or the portable zip) from its Releases page.
 
-1. Double-click **Install Node.cmd** (installs Node.js 20+ with winget if needed,
-   then starts the node). It checks the standard Node install path, so a newly
-   installed runtime is found even though the current cmd window's PATH is stale.
-   If Node is too old or missing, it prints the version and asks you to update.
+1. Run the installer or `ATHENA Node.exe` from the extracted portable folder.
+   The package includes its own Node.js runtime — no npm, WinGet or system Node.
 2. Allow the Windows Firewall prompt for **Private networks**.
-3. The node window shows a big ring and a **six-character pairing code**.
+3. The Node panel shows a **six-character pairing code**.
 4. In the hub: **NODES → SCAN**, find the node (GPU and VRAM shown), type its
    code, press **LINK**.
 
-The node window flips to LINKED and prints its hub name. From then on the hub
-owns it.
+The Node lives in the notification area. Its id, pairing token, settings and
+logs live in `%LOCALAPPDATA%\ATHENA Node`, so installer updates and uninstalls
+keep the machine paired. The tray menu opens, restarts, finds the data folder or
+stops it. Updates are a deliberate download, not a silent replacement.
 
 If discovery is blocked, use **LINK BY ADDRESS** (`192.168.x.x`, port `47910`)
-with the same code.
-
-After the first time, **Start Node.cmd** is all you need. The Node's id,
-pairing token and settings live in `%LOCALAPPDATA%\ATHENA Node`, so replacing
-the program folder with a newer Node package keeps the machine paired. There is
-no automatic Node update; upgrading is a deliberate choice.
-
-The Node folder and the Hub folder are **portable packages, not installers**:
-there is no registry entry, service or uninstaller. The Node needs Node.js 20+
-(the installer gets it); the Hub package carries its own `runtime/node.exe`.
+with the same code. Hub and Node versions are independent; Hub 3.2 accepts Node
+protocol 1.
 
 ---
 
@@ -354,7 +347,9 @@ Node ports: HTTP **47910**, discovery UDP **48880**, ComfyUI tunnel `/comfy/*`
 - Controller administration, Hub security, API keys, brain installation,
   integration writes, node linking/unlinking and Hub shutdown/restart reject
   ordinary controller sessions with 403, even if a button were forced visible.
-- Tools: API keys, hashed with SHA-256, shown once, revocable.
+- Tools: API keys, hashed with SHA-256, shown once, revocable. API keys can
+  read state, but remote execution, installs, node configuration and power
+  actions are administrator-only (and job output is redacted for others).
 - Nodes: cryptographically generated pairing code, shown only on the machine's
   own screen, with 8 attempts/minute per source IP and a one-minute lockout.
   The hub stores a random 24-byte token per node, and the node forgets it on
@@ -417,5 +412,7 @@ athena/
 - Background jobs are shell processes; a node restart drops them.
 - The AI can run commands on a Node whose local `allowShell` is on, but chat
   shell access is limited to the direct-local Hub administrator. Controllers
-  can open apps, inspect state and use the screen. Keep `allowShell` off on
-  machines other people use, and keep API keys out of client-side code.
+  can inspect state, open apps and use the screen; running commands, installing
+  software, changing node settings or powering a machine off is
+  administrator-only on every path. Keep `allowShell` off on machines other
+  people use, and keep API keys out of client-side code.

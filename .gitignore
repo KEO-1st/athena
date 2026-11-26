@@ -27,3 +27,6 @@ desktop.ini
 
 # built distribution folders and zips (recreate with npm run package)
 dist/
+
+# the independent Node product has its own repository
+athena-node/

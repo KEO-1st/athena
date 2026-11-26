@@ -358,7 +358,7 @@ function renderOrbNodes(nodes) {
 function renderNodes(nodes, state) {
   const list = $("#node-list");
   $("#net-detail").textContent = `${state.hub.name} · ${state.hub.addresses?.join(" · ") || "no LAN address"} · port ${state.hub.port} · ${state.platform}`;
-  $("#api-example").textContent = `curl -H "x-athena-key: ath_…" http://${state.hub.addresses?.[0] || "localhost"}:${state.hub.port}/v1/health\n\ncurl -X POST -H "x-athena-key: ath_…" -H "content-type: application/json" \\\n  -d '{"command":"nvidia-smi"}' \\\n  http://${state.hub.addresses?.[0] || "localhost"}:${state.hub.port}/v1/nodes/${nodes[0]?.id || "NODE"}/exec`;
+  $("#api-example").textContent = `curl -H "x-athena-key: ath_…" http://${state.hub.addresses?.[0] || "localhost"}:${state.hub.port}/v1/health\n\ncurl -H "x-athena-key: ath_…" http://${state.hub.addresses?.[0] || "localhost"}:${state.hub.port}/v1/nodes\n\n# Remote execution, installs and power actions need the Hub administrator\n# session on the Hub PC; API keys are intentionally read-only for those.`;
 
   if (!nodes.length) {
     list.innerHTML = `<div class="empty"><p class="micro dim">NO NODES YET</p><p class="micro dim" style="margin-top:8px">RUN THE NODE ON A PC, THEN SCAN</p></div>`;

@@ -26,6 +26,7 @@ import { Jobs } from "./lib/jobs.mjs";
 import { ask, probeBrain, warmBrain, invalidateProbeCache } from "./lib/brain.mjs";
 import { APPS } from "./lib/apps.mjs";
 import { Integrations } from "./lib/integrations.mjs";
+import { isPrivilegedNodeOp } from "./lib/node-privilege.mjs";
 import { createBrainInstaller } from "./lib/brain-install.mjs";
 import { VERSION } from "./lib/version.mjs";
 import {
@@ -336,6 +337,27 @@ function json(res, status, body) {
 
 const readBody = (req) => readJsonBody(req, { limit: 512 * 1024 });
 
+/* Job records contain the command line and full output. Non-admin controllers
+   may follow progress, but not read what was executed on someone else's PC. */
+function jobView(job, admin) {
+  if (!job) return job;
+  if (admin) return job;
+  return {
+    id: job.id,
+    node: job.node,
+    op: job.op,
+    label: `${job.op} on ${job.node}`,
+    state: job.state,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    endedAt: job.endedAt,
+    code: job.code ?? null,
+    source: job.source,
+    error: job.error ? "Hidden for non-admin controllers." : null,
+    redacted: true,
+  };
+}
+
 function serveStatic(req, res, pathname) {
   const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
   const root = path.resolve(PUBLIC);
@@ -405,7 +427,7 @@ function stateFor(base, admin) {
 function broadcast(event, data) {
   for (const [res, meta] of listeners) {
     try {
-      const outgoing = event === "state" ? stateFor(data, meta.admin) : data;
+      const outgoing = event === "state" ? stateFor(data, meta.admin) : event === "job" ? jobView(data, meta.admin) : data;
       res.write(`event: ${event}\ndata: ${JSON.stringify(outgoing)}\n\n`);
     } catch {
       listeners.delete(res);
@@ -752,6 +774,8 @@ const server = http.createServer(async (req, res) => {
 
       if (rest === "/action" && method === "POST") {
         const body = await readBody(req);
+        const op = String(body.op || "status");
+        if (isPrivilegedNodeOp(op) && !requireAdmin(req, res)) return;
         try {
           const result = await registry.action(node.id, String(body.op || "status"), body.args || {}, Number(body.timeout) || 120_000);
           return json(res, 200, { ok: true, result });
@@ -761,6 +785,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (rest === "/exec" && method === "POST") {
+        if (!requireAdmin(req, res)) return;
         const body = await readBody(req);
         if (!body.command) return json(res, 400, { error: "Give a command." });
         const auth = req.athenaAuth || authenticate(req);
@@ -777,6 +802,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (rest === "/tasks" && method === "GET") {
+        if (!requireAdmin(req, res)) return;
         const result = await registry.tasks(node.id);
         return json(res, 200, result);
       }
@@ -904,9 +930,13 @@ const server = http.createServer(async (req, res) => {
       return json(res, 404, { error: "Unknown node route." });
     }
 
-    if (route === "/api/jobs" && method === "GET") return json(res, 200, { jobs: jobs.list(50) });
+    if (route === "/api/jobs" && method === "GET") {
+      const admin = Boolean(req.athenaAuth?.admin);
+      return json(res, 200, { jobs: jobs.list(50).map((job) => jobView(job, admin)) });
+    }
 
     if (route === "/api/jobs" && method === "POST") {
+      if (!requireAdmin(req, res)) return;
       const body = await readBody(req);
       const node = registry.get(body.node);
       if (!node) return json(res, 400, { error: `No node called "${body.node}".` });
@@ -938,11 +968,13 @@ const server = http.createServer(async (req, res) => {
     if (jobMatch) {
       const job = jobs.get(decodeURIComponent(jobMatch[1]));
       if (!job) return json(res, 404, { error: "No such job." });
+      const admin = Boolean(req.athenaAuth?.admin);
       if (jobMatch[2] && method === "POST") {
+        if (!requireAdmin(req, res)) return;
         const ok = await jobs.cancel(job.id);
-        return json(res, ok ? 200 : 409, { ok, job });
+        return json(res, ok ? 200 : 409, { ok, job: jobView(job, admin) });
       }
-      return json(res, 200, { job });
+      return json(res, 200, { job: jobView(job, admin) });
     }
 
     if (route === "/api/ask" && method === "POST") {
@@ -1252,7 +1284,10 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { nodes: registry.list() });
     }
 
-    if (route === "/v1/jobs" && method === "GET") return json(res, 200, { jobs: jobs.list(50) });
+    if (route === "/v1/jobs" && method === "GET") {
+      const admin = Boolean(req.athenaAuth?.admin);
+      return json(res, 200, { jobs: jobs.list(50).map((job) => jobView(job, admin)) });
+    }
 
     if (route === "/v1/health") {
       return json(res, 200, { ok: true, name: config.hubName, version: VERSION, nodes: registry.list(), brain: await probeBrain(config.brain) });
