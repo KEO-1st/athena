@@ -1,9 +1,9 @@
 {
   "name": "athena",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "private": true,
   "type": "module",
-  "description": "ATHENA — a personal AI that coordinates the machines on your network.",
+  "description": "ATHENA Hub — the central intelligence and authority for the machines on your network.",
   "engines": {
     "node": ">=20"
   },

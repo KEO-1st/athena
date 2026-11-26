@@ -1,7 +1,7 @@
 {
-  "name": "ATHENA",
-  "short_name": "ATHENA",
-  "description": "Your machines, one intelligence.",
+  "name": "ATHENA Hub",
+  "short_name": "ATHENA Hub",
+  "description": "ATHENA Hub — central intelligence and authority for your machines.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

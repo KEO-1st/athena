@@ -1503,6 +1503,30 @@ details[open] > summary::before { content: "[ \2212 ]  "; }
 .app-row-head .micro { letter-spacing: 0.12em; color: var(--ink); }
 
 /* Software lives inside the machine card, not in a global tab. */
+.node-hardware {
+  margin: 12px 0 6px;
+  padding: 0;
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.014);
+}
+.node-hardware > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.node-hardware > summary::-webkit-details-marker { display: none; }
+.node-hardware > summary::before { content: "[ + ]  "; color: var(--accent); }
+.node-hardware[open] > summary::before { content: "[ − ]  "; }
+.hw-detail { padding: 2px 12px 12px; }
+.hw-detail .kv { align-items: flex-start; }
+.hw-detail .kv b { text-align: right; max-width: 72%; }
+
 .node-soft {
   margin: 12px 0 6px;
   padding: 0;

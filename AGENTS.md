@@ -20,10 +20,10 @@ A sentence in chat can become real tool calls on the right machine.
 | Component | Runs where | Responsibilities |
 | --- | --- | --- |
 | **Hub** (`server.mjs`) | One PC, spare laptop or Raspberry Pi | UI/API, discovery, pairing, jobs, brain, sessions, security, SSE |
-| **Node** (`node/athena-node.mjs`) | Every machine being controlled | Shell, processes, software installs, screen capture, mouse/keyboard, audio, ComfyUI tunnel |
+| **Node** (`KEO-1st/athena-node`, `athena-node.mjs`) | Every machine being controlled | Shell, processes, software installs, screen capture, mouse/keyboard, audio, ComfyUI tunnel |
 | **Controller** (`public/`) | Phone, tablet or another PC | PWA chat, Jobs, Nodes, Screen; never Hub administration |
 
-**Current release:** Hub **3.2.0**, Node **0.1.1**, Node protocol **1**.
+**Current release:** Hub **3.3.0**, Node **0.3.0**, Node protocol **1**.
 Zero runtime npm dependencies, Node.js 20+, JSON storage, no build step for the
 controller. Everything stays on the local network: no cloud, account or
 telemetry.
@@ -55,11 +55,12 @@ lib/                    Hub modules
   identity.mjs          Fast deterministic identity answers
   version.mjs           Version reading helpers
 public/                 PWA served by the Hub (index.html, app.js, styles.css, sw.js)
-node/                   Standalone Node agent, panel, Windows PowerShell helpers
+node/                   Legacy Hub-side Node snapshot; do not use as Node source
+athena-node/            Separate Node product checkout (gitignored by the Hub)
   athena-node.mjs       Node HTTP server, actions, pairing, auth
   host-screen.ps1       Windows screen capture (.NET)
   host-input.ps1        Windows mouse/keyboard (user32)
-  program(s).mjs        Per-machine software catalogue/actions
+  panel.html            Adaptive tabbed Node panel
   protocol.mjs          Node-side protocol constants
   version.json          Independent Node version (do not tie to the Hub)
 tests/                  node:test suites, check, smoke and helpers
@@ -85,9 +86,10 @@ npm start                 # Hub on http://127.0.0.1:4790 (prints LAN URL + code)
 npm run node              # Node agent on the current machine (port 47910)
 ```
 
-On Windows, `Start Athena.cmd`, `node/Start Node.cmd` and the packaged
-`Install Node.cmd` are the double-click equivalents. `npm run package:node` and
-`npm run package:hub` build `dist/`; only do that when packaging is the task.
+On Windows, `Start Athena.cmd` starts the Hub. The Node is packaged from its own
+repository (`athena-node/`) and its public package contains no CMD launchers;
+`npm run package:node` and `npm run package:hub` build `dist/` only when
+packaging is the task.
 
 Runtime state must not be touched by tests or agents:
 
@@ -278,9 +280,13 @@ single Hub version), Phase 0/1 containment work, Hub 3.0 packaging, Node V0.1
 packaging and protocol negotiation, the 3.1 reliability/security/controller
 sprint (direct-local admin authority, controller redaction, per-controller
 conversations, bounded model calls, screen-helper recovery, honest audio/TTS),
-and the 3.2 brain sprint (multi-step tool loop, failure recovery, clarification,
+the 3.2 brain sprint (multi-step tool loop, failure recovery, clarification,
 conversation-aware tool gating, progress events, honest nonzero exits,
-duplicate-action suppression and administrator-only chat shell).
+duplicate-action suppression and administrator-only chat shell), and the
+coordinated 3.3 / Node 0.3 sprint (single-window Node lifecycle, safe permission
+defaults, adaptive panel, measured hardware inventory and detail view, direct
+read-only hardware answers, incremental browser speech, controller reconnect
+backoff and network-first shell assets).
 
 Planned but **not implemented** — do not start unless the task explicitly asks:
 

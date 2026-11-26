@@ -1044,7 +1044,12 @@ const server = http.createServer(async (req, res) => {
       }
       /* Conversations are independent per controller. A reply is returned only
          to the caller, never broadcast to every connected device. */
-      if (answer.meta) log(`ask ${answer.meta.ms}ms · ${answer.meta.path}${answer.meta.tools?.length ? " · " + answer.meta.tools.join(",") : ""}`);
+      if (answer.meta) {
+        const timing = answer.meta.modelMs != null || answer.meta.nodeMs != null
+          ? ` · model ${answer.meta.modelMs || 0}ms · node ${answer.meta.nodeMs || 0}ms`
+          : "";
+        log(`ask ${answer.meta.ms}ms · ${answer.meta.path}${timing}${answer.meta.tools?.length ? " · " + answer.meta.tools.join(",") : ""}`);
+      }
       if (wantsStream) {
         send({ type: "done", ...answer });
         return res.end();
@@ -1370,7 +1375,9 @@ server.listen(LISTEN_PORT, "0.0.0.0", () => {
   console.log("   discovery  UDP " + DISCOVERY_PORT + "  ·  nodes " + registry.nodes.length);
   console.log("");
   log("athena up");
-  setInterval(() => void tick(), 8000);
+  /* Nodes cache their expensive inventory. Fifteen seconds is enough for
+     orchestration without making every controller poll WMI twice a minute. */
+  setInterval(() => void tick(), 15_000);
   setInterval(() => pruneSessions(), 6 * 60 * 60 * 1000);
   void tick();
   setTimeout(prewarm, 2500);

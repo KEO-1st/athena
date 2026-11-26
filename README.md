@@ -1,8 +1,10 @@
-# ATHENA
+# ATHENA Hub
 
 **Your machines, one intelligence.**
 
-ATHENA is a private hub for every computer you own. Run one small agent on each
+**ATHENA Hub 3.3.0** is the central authority; **ATHENA Node 0.3.0** is the
+independent agent on each machine. ATHENA is a private hub for every computer
+you own. Run one small agent on each
 machine, run the hub on any of them (or a spare laptop / Raspberry Pi), and from
 then on:
 
@@ -72,8 +74,10 @@ keep the machine paired. The tray menu opens, restarts, finds the data folder or
 stops it. Updates are a deliberate download, not a silent replacement.
 
 If discovery is blocked, use **LINK BY ADDRESS** (`192.168.x.x`, port `47910`)
-with the same code. Hub and Node versions are independent; Hub 3.2 accepts Node
-protocol 1.
+with the same code. Hub and Node versions are independent; Hub 3.3 accepts Node
+protocol 1, including existing 0.2 Nodes. A new 0.3 Node opens one window, keeps
+running after the panel closes, and starts with remote shell, input and shutdown
+switched off until someone at that PC enables them under **PERMISSIONS**.
 
 ---
 
@@ -113,8 +117,8 @@ desktop, all at once.
 
 This is real control (Windows `user32` + `SendKeys`, through the node's
 `host-input.ps1`; pictures come from `host-screen.ps1`), so the mouse on that PC
-actually moves. A node can switch it off: its window → **SETTINGS → Allow mouse
-& keyboard control**.
+actually moves. A node can switch it off in its own window → **PERMISSIONS →
+Allow keyboard and mouse input**.
 
 With a **vision** model the AI can look too: "open that video with the old man
 in the green hat" becomes `see_screen` → `control_mouse_keyboard` (click) →
@@ -182,8 +186,11 @@ ATHENA still understands `status`, `run <command>`, `start comfy`, `scan`.
 
 The model is given eight tools — `list_nodes`, `node_status`, `node_processes`,
 `run_command`, `node_action`, `manage_brain`, `see_screen`,
-`control_mouse_keyboard` — and a description of every machine's GPU, VRAM,
-temperature and services. It keeps tools available across the steps of a
+`control_mouse_keyboard` — and a description of every machine's CPU, installed /
+usable / available RAM, GPU, VRAM, disks, displays, audio, OS, installed apps,
+temperature and services. Specifications, GPU status, installed applications
+and "which Node has the most available RAM?" are answered directly from measured
+Node values (read-only for controllers), without asking a model to invent them. It keeps tools available across the steps of a
 multi-step request, reads each result, and asks before guessing when a target is
 ambiguous. Shell commands are available only to the direct-local Hub
 administrator; controllers can still inspect machines, open apps and use the
@@ -357,8 +364,10 @@ Node ports: HTTP **47910**, discovery UDP **48880**, ComfyUI tunnel `/comfy/*`
 - **LAN HTTP limitation:** hub/node traffic, including words spoken for
   pairing and node tokens, is plain HTTP on the LAN. It is not safe on an
   untrusted network. Put HTTPS/VPN in front of the hub before crossing one.
-- Node capabilities can be switched off per machine in its window
-  (**Allow shell commands**, **Allow remote shutdown**).
+- Node capabilities can be switched off per machine in its own window
+  (**PERMISSIONS**). New installations default shell, keyboard/mouse input and
+  remote shutdown to off; a Hub request cannot widen them. Disabled actions
+  return 403 before any pointer, shell or power work happens.
 - There is no cloud, no account, no telemetry. LAN only. If you expose the hub
   to the internet, put HTTPS and real auth in front of it first — the access
   code is a convenience lock, not a hardened perimeter.
@@ -371,10 +380,8 @@ athena/
   server.mjs            hub
   lib/                  store · discovery · registry · jobs · brain
   public/               the PWA (index, app.js, styles.css, sw, icons)
-  node/athena-node.mjs  the agent for each machine
-  node/panel.html       the window it shows
-  node/host-screen.ps1  Windows screen capture (PowerShell + .NET)
-  node/host-input.ps1   Windows mouse & keyboard input (user32)
+  athena-node/          the separate Node product repository (its own releases)
+  node/                 legacy Hub-side snapshot; not the Node source of truth
   data/                 config, keys, sessions, nodes, jobs  (gitignored)
   data/access-code.txt  the access code, in plain text, for when you forget it
 ```

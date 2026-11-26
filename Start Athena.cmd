@@ -7,7 +7,7 @@ powershell -NoProfile -Command "try { $c=New-Object Net.Sockets.TcpClient; $c.Co
 if not errorlevel 1 (
   echo.
   echo   ================================================
-  echo    ATHENA IS ALREADY RUNNING
+  echo    ATHENA HUB IS ALREADY RUNNING
   echo   ================================================
   echo.
   if exist "data\access-code.txt" (

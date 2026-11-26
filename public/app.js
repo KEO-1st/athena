@@ -302,7 +302,7 @@ function render() {
   const nodes = state.nodes || [];
   const online = nodes.filter((node) => node.online);
 
-  $("#hub-line").textContent = `HUB · ${String(state.hub.name).toUpperCase()} · v${state.hub.version} · ${state.hub.addresses?.[0] || "LAN"}`;
+  $("#hub-line").textContent = `ATHENA HUB · ${String(state.hub.name).toUpperCase()} · v${state.hub.version} · ${state.hub.addresses?.[0] || "LAN"}`;
   const vram = online.reduce((sum, node) => sum + (node.status?.gpu?.vramGb || 0), 0);
   $("#orb-count").textContent = String(nodes.length).padStart(2, "0");
   $("#orb-online").textContent = String(online.length).padStart(2, "0");
@@ -368,6 +368,7 @@ function renderNodes(nodes, state) {
   /* State updates arrive every few seconds. Rebuilding the cards must not
      slam an open Software section shut or throw away its loaded list. */
   const openSoftware = new Set([...list.querySelectorAll("details[data-soft][open]")].map((item) => item.dataset.soft));
+  const openHardware = new Set([...list.querySelectorAll("details[data-hw][open]")].map((item) => item.dataset.hw));
 
   list.innerHTML = nodes
     .map((node) => {
@@ -379,7 +380,7 @@ function renderNodes(nodes, state) {
       return `<article class="card ${node.online ? "on" : "off"} bracket">
         <div class="card-top">
           <div>
-            <h3>${esc(node.name)}</h3>
+            <h3>${esc(node.name)} ${node.localToHub ? '<span class="badge ok">THIS PC</span>' : ""}</h3>
             <p class="micro dim">NODE ${String(node.index || 0).padStart(2, "0")} · ${esc(node.host)}:${node.port} · NODE SOFTWARE ${node.nodeVersion ? "v" + esc(node.nodeVersion) : "UNKNOWN"} · PROTOCOL ${node.protocol == null ? "LEGACY" : esc(node.protocol)}</p>
           </div>
           <span class="badge ${node.online ? (nodeBusy(node) ? "run" : "ok") : "bad"}">${node.online ? (nodeBusy(node) ? "WORKING" : "ONLINE") : "OFFLINE"}</span>
@@ -388,12 +389,16 @@ function renderNodes(nodes, state) {
           <div class="metric"><span>GPU</span><b title="${esc(gpu.name || "")}">${esc(gpu.name || "—")}</b></div>
           <div class="metric"><span>VRAM</span><b>${gpu.vramGb ? gpu.vramGb + " GB" + (gpu.usedGb ? " · " + gpu.usedGb + " used" : "") : "—"}</b></div>
           <div class="metric"><span>LOAD</span><b>${gpu.util != null ? gpu.util + "%" : "—"}${gpu.temp != null ? " · " + gpu.temp + "°" : ""}</b></div>
-          <div class="metric"><span>CPU</span><b>${status.cores ? status.cores + " cores" : "—"}</b></div>
-          <div class="metric"><span>RAM</span><b>${status.memory ? status.memory.totalGb + " GB" : "—"}</b></div>
+          <div class="metric"><span>CPU</span><b>${status.hardware?.cpu?.model ? esc(status.hardware.cpu.model) : status.cores ? status.cores + " cores" : "—"}</b></div>
+          <div class="metric"><span>RAM FREE</span><b>${status.hardware?.memory?.freeGb != null && status.hardware?.memory?.totalGb != null ? status.hardware.memory.freeGb + " / " + status.hardware.memory.totalGb + " GB" : status.memory ? status.memory.totalGb + " GB" : "—"}</b></div>
           <div class="metric"><span>SCREEN</span><b>${caps.screen ? (caps.input ? "CONTROL" : "VIEW") : "—"}</b></div>
           <div class="metric"><span>SOUND</span><b>${caps.audio ? "LISTEN" : "—"}</b></div>
         </div>
         ${compatBad ? `<p class="micro job-error">✕ ${esc(compat.reason || "This Node is not compatible with this Hub.")}</p>` : ""}
+        <details class="node-hardware" data-hw="${esc(node.id)}">
+          <summary><span class="micro">HARDWARE &amp; CAPABILITIES</span><span class="micro dim">${status.hardware ? "MEASURED" : "UNAVAILABLE"}</span></summary>
+          ${hardwarePanel(node, status)}
+        </details>
         <details class="node-soft" data-soft="${esc(node.id)}">
           <summary><span class="micro">SOFTWARE ON THIS MACHINE</span><span class="micro dim">DETECT · INSTALL · START</span></summary>
           <div class="soft-body" data-soft-body="${esc(node.id)}"><p class="micro dim">OPEN TO READ WHAT IS INSTALLED ON ${esc(node.name.toUpperCase())}.</p></div>
@@ -407,6 +412,11 @@ function renderNodes(nodes, state) {
     })
     .join("");
 
+  for (const id of openHardware) {
+    const details = list.querySelector(`details[data-hw="${CSS.escape(id)}"]`);
+    if (details) details.open = true;
+  }
+
   for (const id of openSoftware) {
     const details = list.querySelector(`details[data-soft="${CSS.escape(id)}"]`);
     if (!details) continue;
@@ -416,6 +426,50 @@ function renderNodes(nodes, state) {
     if (appsState.nodes.has(id) && Date.now() - (appsState.at.get(id) || 0) < SOFT_CACHE_MS) renderNodeSoftware(id, body);
     else void loadNodeSoftware(id);
   }
+}
+
+function hwText(value, suffix = "") {
+  return value === null || value === undefined || value === "" ? "unavailable" : `${value}${suffix}`;
+}
+
+/** A real detail view for one machine. Missing readings stay explicit. */
+function hardwarePanel(node, status) {
+  const hw = status.hardware;
+  if (!hw) return `<p class="micro dim" style="padding:10px 0">This Node did not return a hardware inventory. Nothing is assumed.</p>`;
+  const cpu = hw.cpu || {};
+  const memory = hw.memory || {};
+  const gpu = hw.gpu || status.gpu || {};
+  const disks = Array.isArray(hw.disks) ? hw.disks : null;
+  const displays = Array.isArray(hw.displays) ? hw.displays : null;
+  const audio = hw.audio || null;
+  const apps = hw.installedApps || null;
+  const caps = status.capabilities || {};
+  const rows = [
+    ["CPU", cpu.model || "unavailable"],
+    ["CPU USE", cpu.utilizationPct != null ? `${cpu.utilizationPct}% · ${cpu.cores ?? "?"} cores` : `${cpu.cores ?? "?"} cores · live use unavailable`],
+    ["RAM", `installed ${hwText(memory.installedGb, " GB")} · usable ${hwText(memory.totalGb, " GB")} · available ${hwText(memory.freeGb, " GB")}`],
+    ["GPU", gpu.name || "unavailable"],
+    ["VRAM", `installed ${hwText(gpu.vramGb, " GB")} · available ${hwText(gpu.availableGb, " GB")}${gpu.availablePct != null ? ` (${gpu.availablePct}%)` : ""}`],
+    ["GPU USE", `${hwText(gpu.util, "%")}${gpu.temp != null ? ` · ${gpu.temp}°C` : ""}`],
+    ["OS", hw.os ? `${hw.os.type || ""} ${hw.os.release || ""} · ${hw.os.arch || "?"}`.trim() : "unavailable"],
+  ];
+  const diskText = disks ? (disks.length ? disks.map((disk) => `${disk.id} ${hwText(disk.freeGb, " GB")} free of ${hwText(disk.totalGb, " GB")}`).join(" · ") : "no fixed disks reported") : "unavailable";
+  const displayText = displays ? (displays.length ? displays.map((display) => `${display.width || "?"}×${display.height || "?"}${display.refreshHz ? ` @${display.refreshHz}Hz` : ""}${display.primary ? " primary" : ""}`).join(" · ") : "no displays reported") : "unavailable";
+  const audioText = audio ? `${audio.inputs?.length ?? 0} input · ${audio.outputs?.length ?? 0} output${audio.captureReady ? " · capture ready" : " · capture not ready"}` : "unavailable";
+  const appText = apps ? `${apps.count ?? "?"} installed${apps.sample?.length ? ` · ${apps.sample.slice(0, 10).map((name) => esc(name)).join(" · ")}` : ""}` : "unavailable";
+  return `<div class="hw-detail">
+    ${rows.map(([label, value]) => `<div class="kv"><span class="micro dim">${label}</span><b>${esc(value)}</b></div>`).join("")}
+    <div class="kv"><span class="micro dim">STORAGE</span><b>${esc(diskText)}</b></div>
+    <div class="kv"><span class="micro dim">DISPLAYS</span><b>${esc(displayText)}</b></div>
+    <div class="kv"><span class="micro dim">AUDIO</span><b>${esc(audioText)}</b></div>
+    <div class="kv"><span class="micro dim">INSTALLED APPS</span><b>${esc(appText)}</b></div>
+    <div class="chips" style="margin-top:8px">
+      <span class="chip ${caps.shell ? "up" : ""}">SHELL ${caps.shell ? "ON" : "OFF"}</span>
+      <span class="chip ${caps.input ? "up" : ""}">INPUT ${caps.input ? "ON" : "OFF"}</span>
+      <span class="chip ${caps.shutdown ? "up" : ""}">SHUTDOWN ${caps.shutdown ? "ON" : "OFF"}</span>
+      <span class="chip ${caps.screen ? "up" : ""}">SCREEN ${caps.screen ? "READY" : "OFF"}</span>
+    </div>
+  </div>`;
 }
 
 const JOB_BADGE = { queued: "", running: "run", done: "ok", failed: "bad", cancelled: "bad", timeout: "bad" };
@@ -1030,6 +1084,29 @@ function speak(text) {
   speakBrowser(text);
 }
 
+/**
+ * Feed a sentence to the browser speech queue while the model is still
+ * writing. The old app waited for the complete answer, so the first word could
+ * be tens of seconds late. This starts as soon as a sentence is complete and
+ * appends the rest without cancelling what is already playing.
+ */
+function queueBrowserSpeech(text) {
+  if (!store.speak || serverProvider() !== "browser" || !speechReady()) return false;
+  const chunks = speechChunks(text);
+  if (!chunks.length) return false;
+  primeVoice();
+  if (!speechSynthesis.speaking && !spokenChunks.length) {
+    const gen = ++speakGen;
+    spokenChunks = chunks;
+    window.setTimeout(() => {
+      if (gen === speakGen && spokenChunks.length) speakNext(gen);
+    }, 80);
+  } else {
+    spokenChunks.push(...chunks);
+  }
+  return true;
+}
+
 function stopBrowserSpeech() {
   if (!speechReady()) return;
   spokenChunks = [];
@@ -1096,6 +1173,8 @@ async function submitAsk(text) {
   const pending = thinking();
   const live = liveMessage();
   let streamed = "";
+  let streamSpoken = 0;
+  let speechStreamed = false;
   try {
     const res = await fetch("/api/ask", {
       method: "POST",
@@ -1148,6 +1227,15 @@ async function submitAsk(text) {
             if (!streamed) pending.remove();
             streamed += event.text;
             live.show(streamed);
+            /* Speak complete sentences before the full answer arrives. Only
+               the browser provider can do this without a second request per
+               sentence; server speech still starts when the text is final. */
+            const boundary = Math.max(streamed.lastIndexOf(". "), streamed.lastIndexOf("! "), streamed.lastIndexOf("? "), streamed.lastIndexOf("\n"));
+            if (boundary > streamSpoken && boundary - streamSpoken > 35) {
+              const piece = streamed.slice(streamSpoken, boundary + 1);
+              if (queueBrowserSpeech(piece)) speechStreamed = true;
+              streamSpoken = boundary + 1;
+            }
           } else if (event.type === "status") {
             if (!streamed) {
               live.show(event.text || (event.elapsedSec ? `Still working · ${event.elapsedSec}s` : "ATHENA is thinking…"));
@@ -1170,7 +1258,13 @@ async function submitAsk(text) {
     store.history = store.history.slice(-16);
     saveChat();
     renderConversationList();
-    speak(reply);
+    if (speechStreamed && serverProvider() === "browser") {
+      const tail = reply.slice(streamSpoken);
+      if (tail.trim()) queueBrowserSpeech(tail);
+      streamSpoken = reply.length;
+    } else {
+      speak(reply);
+    }
     loadState();
   } catch (error) {
     pending.remove();
@@ -1251,9 +1345,21 @@ async function getStreamTicket() {
   return streamTicket.value;
 }
 
+let streamRetry = 0;
+let streamRetryTimer = 0;
+
+function scheduleStreamReconnect() {
+  if (!store.token || document.visibilityState === "hidden") return;
+  window.clearTimeout(streamRetryTimer);
+  const delay = Math.min(30_000, 2000 * 2 ** Math.min(streamRetry, 4));
+  streamRetry += 1;
+  streamRetryTimer = window.setTimeout(() => void connectStream(), delay);
+}
+
 async function connectStream() {
   store.stream?.close();
   if (!store.token) return;
+  if (document.visibilityState === "hidden") return;
   try {
     const ticket = await getStreamTicket();
     const stream = new EventSource(`/api/events?ticket=${encodeURIComponent(ticket)}`);
@@ -1261,6 +1367,7 @@ async function connectStream() {
     stream.addEventListener("state", (event) => {
       try {
         store.state = JSON.parse(event.data);
+        streamRetry = 0;
         render();
       } catch {
         /* ignore */
@@ -1269,16 +1376,31 @@ async function connectStream() {
     stream.addEventListener("job", () => loadState());
     stream.onerror = () => {
       /* A ticket can expire while the phone sleeps. Reconnect with a fresh one
-         instead of letting the browser retry a dead URL forever. */
+         and an exponential delay instead of hammering a dead Hub. */
       stream.close();
       if (store.stream !== stream) return;
       store.stream = null;
-      setTimeout(() => void connectStream(), 2500);
+      scheduleStreamReconnect();
     };
   } catch (error) {
-    if (!String(error.message).includes("Locked")) setTimeout(() => void connectStream(), 4000);
+    if (!String(error.message).includes("Locked")) scheduleStreamReconnect();
   }
 }
+
+/* A backgrounded phone must not keep an SSE socket or poll loop alive. */
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    store.stream?.close();
+    store.stream = null;
+    window.clearTimeout(streamRetryTimer);
+    return;
+  }
+  if (store.token) {
+    void loadState();
+    streamRetry = 0;
+    void connectStream();
+  }
+});
 
 /* ─────────────────────────────────────────────────────────── screens */
 

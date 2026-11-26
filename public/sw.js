@@ -27,7 +27,7 @@ self.addEventListener("fetch", (event) => {
       fetch(event.request).catch(
         () =>
           new Response(
-            "<!doctype html><meta name=viewport content='width=device-width'><body style='background:#04050a;color:#e9e4d6;font-family:system-ui,sans-serif;padding:40px'><h1 style='letter-spacing:.3em;font-weight:300;color:#f2cf8a'>ATHENA</h1><p style='color:#857e6d'>The hub is not reachable. Start it on the PC that runs it.</p>",
+            "<!doctype html><meta name=viewport content='width=device-width'><body style='background:#04050a;color:#e9e4d6;font-family:system-ui,sans-serif;padding:40px'><h1 style='letter-spacing:.3em;font-weight:300;color:#f2cf8a'>ATHENA HUB</h1><p style='color:#857e6d'>The hub is not reachable. Start it on the PC that runs it.</p>",
             { headers: { "content-type": "text/html; charset=utf-8" } }
           )
       )
@@ -35,19 +35,18 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  /* Network-first for the HTML shell's JS/CSS: after an update a controller
+     must not keep running a stale app.js from yesterday's cache. The cached
+     copy is only an offline fallback. */
   event.respondWith(
-    caches.match(event.request).then((hit) => {
-      const network = fetch(event.request)
-        .then((res) => {
-          if (res.ok) {
-            const copy = res.clone();
-            caches.open(VERSION).then((cache) => cache.put(event.request, copy)).catch(() => undefined);
-          }
-          return res;
-        })
-        .catch(() => hit);
-      /* Serve instantly when we have it, refresh in the background. */
-      return hit || network;
-    })
+    fetch(event.request, { cache: "no-cache" })
+      .then((res) => {
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(VERSION).then((cache) => cache.put(event.request, copy)).catch(() => undefined);
+        }
+        return res;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
