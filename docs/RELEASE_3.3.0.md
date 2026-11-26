@@ -67,7 +67,7 @@ an older Hub ignores them and a 0.2 Node still pairs as a protocol-1 Node.
 | Check | Result |
 | --- | --- |
 | Hub `npm run check` | 69/69 files parsed |
-| Hub `npm test` | 133 tests: 131 pass, 2 skipped (opt-in live model) |
+| Hub `npm test` | 134 tests: 132 pass, 2 skipped (opt-in live model) |
 | Hub `npm run smoke` | ok · real Hub boot · v3.3.0 |
 | Hub `git diff --check` | clean |
 | Node `npm run check` | 16/16 files parsed |

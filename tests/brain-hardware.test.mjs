@@ -85,3 +85,19 @@ test("a controller can read hardware but this path executes no privileged action
   assert.equal(answer.actions[0].name, "node_status");
   assert.doesNotMatch(answer.actions[0].name, /run_command|exec|shutdown/);
 });
+
+test("the no-model path opens an app on the Node the sentence names", async () => {
+  const calls = [];
+  const registry = registryWith([local, second]);
+  registry.action = async (id, op, args) => {
+    calls.push({ id, op, args });
+    return { ok: true, opened: "notepad.exe" };
+  };
+  const answer = await ask({ text: "open notepad on RenderBox", config, registry, history: [] });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].id, "node_second", "the named machine is the target, not the Hub PC");
+  assert.equal(calls[0].op, "open");
+  assert.equal(calls[0].args.app, "notepad");
+  assert.match(answer.reply, /RenderBox/);
+  assert.equal(answer.actions[0].ok, true);
+});
