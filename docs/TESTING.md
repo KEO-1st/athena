@@ -6,6 +6,7 @@ Node's built-in test runner, so a clean checkout plus Node 20+ is enough.
 ```bash
 npm run check        # parse every .js/.mjs file with Node itself
 npm test             # unit + integration tests (starts real hub/node on temp dirs)
+npm run test:live    # opt-in real local model; skips unless ATHENA_LIVE_MODEL is set
 npm run smoke        # one full hub boot: health, shell, service worker, auth wall
 npm run package:node # standalone Node V0.1 folder + zip
 npm run package:hub  # Hub folder + ATHENA Hub.exe + zip
@@ -23,6 +24,8 @@ workflow is in `AGENTS.md`.
 | `tests/version.test.mjs` | `version.json` is valid semver, matches `package.json`, and no source file hard-codes a version. |
 | `tests/catalog.test.mjs` | The hub and node read one app catalogue; install commands never reach the hub payload. |
 | `tests/brain.test.mjs` | Provider probing is cached and invalidated explicitly; controller brain refusal; instant greeting; `think:false`/token cap; timeout abort cleanup; sequential tool-capability retry with no overlap. |
+| `tests/brain-conversation.test.mjs` | Mocked multi-step tool loop, result observation, natural read-tool follow-up, no-tool general questions, greeting, no-history clarification, malformed arguments, context, unknown Node, controller shell refusal (tool and fallback paths), duplicate suppression, timeout retry, and provider death after a verified action. |
+| `tests/brain-live.test.mjs` | Opt-in real local-model checks: capability conversation without tools and reading a real fake-Node RAM value through a tool. Skips in the default suite. |
 | `tests/jobs.test.mjs` | Reboot recovery, running-job cancellation through the node, and the no-cancel-after-done rule, against a fake node. |
 | `tests/hub.test.mjs` | Auth wall, access-code-as-credential rejection, token-in-URL rejection, state contains no code/data dir, Host/Origin policy, CORS, body limits, settings re-confirmation, local intent header, stream tickets, immediate chat status/NDJSON, no TTS browser fallback, service-worker version substitution. |
 | `tests/node.test.mjs` | Node boots in a temp identity directory, loopback alone is insufficient, status requires a credential, log tail is redacted, a hub cannot widen node permissions, Host/body policy. |
@@ -86,7 +89,7 @@ These depend on the host or a browser and are not automated:
    reused from `%LOCALAPPDATA%\ATHENA Node`. This is **NOT YET VERIFIED**; the
    code now resolves the standard install path instead of trusting the stale
    cmd PATH.
-9. **Hub executable** — unzip `dist/ATHENA-Hub-3.1.0-win64.zip` to a writable
+9. **Hub executable** — unzip `dist/ATHENA-Hub-3.2.0-win64.zip` to a writable
    folder, double-click `ATHENA Hub.exe`, confirm the browser opens, the access
    code is printed, and `data/` is created beside the exe. Check Defender's
    response to a new unsigned executable.
@@ -135,10 +138,25 @@ These depend on the host or a browser and are not automated:
 - `node/node.log` contains no pairing code and `/api/status`'s `log` tail is
   redacted.
 
+## Live-model tests
+
+The default suite is deterministic and uses an OpenAI-compatible stub for the
+brain loop. Real local inference is a separate, explicit check:
+
+```bash
+ATHENA_LIVE_MODEL=qwen2.5:7b npm run test:live
+```
+
+It needs Ollama on `127.0.0.1:11434` (override with `ATHENA_LIVE_BASE`) and a
+model that supports tools. Without `ATHENA_LIVE_MODEL`, both live tests skip.
+Report live results separately from mocked results; a passing stub proves the
+Hub contract, not the model's judgement.
+
 ## Adding tests
 
 Put `*.test.mjs` files in `tests/`. Prefer a real process boundary for auth,
 Host/Origin and body limits — those behaviours live in the HTTP handler, not in
 a pure function. Prefer the fake node for queue behaviour. Keep each test
 independent of ordering where possible; the node and hub suites share one boot
-for speed.
+for speed. Do not assert inside a fake provider handler: `ask()` catches errors
+and falls back, which hides the real failure. Assert after the call instead.

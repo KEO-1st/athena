@@ -1,8 +1,8 @@
 # ATHENA — Development Roadmap
 
 **Companion to:** `docs/ATHENA_ARCHITECTURE_AUDIT.md`
-**Status:** Phase 0/1 foundations, ATHENA 3.0 packaging and the 2026-11-25 reliability/controller sprint are implemented. Phase 2 onward is still planned; see the latest delivery record at the end.
-**Baseline:** branch `main`, Hub 3.1.0, Node 0.1.1, zero runtime npm dependencies, 105 automated tests, no CI yet. Provider-independent development instructions live in `AGENTS.md`.
+**Status:** Phase 0/1 foundations, ATHENA 3.0 packaging, the 2026-11-25 reliability/controller sprint and the 3.2 brain sprint are implemented. Phase 2 onward is still planned; see the latest delivery record at the end.
+**Baseline:** branch `athena-3.2-wip`, Hub 3.2.0, Node 0.1.1, zero runtime npm dependencies, 121 automated tests plus 2 opt-in live-model tests, no CI yet. Provider-independent development instructions live in `AGENTS.md`.
 
 ---
 
@@ -694,3 +694,31 @@ development controls.
 **Verification target:** `npm run check`, `npm test`, `npm run smoke`. Real-device
 results must be recorded separately; automated tests cannot prove iOS playback,
 microphone permission, UIPI input, FPS or visual placement.
+
+---
+
+## 24. ATHENA 3.2 brain reliability sprint (2026-11-26)
+
+**Hub 3.2.0 · Node 0.1.1 · protocol 1 (unchanged).** Scope was conversation and
+tool reliability found by tracing the real Hub → Brain → provider → Node path.
+
+| Area | Outcome |
+| --- | --- |
+| Conversation | General questions and explanations are not treated as machine commands. Greetings answer locally, including "Hello, how are you?". A bare follow-up with no prior turn asks one clarifying question instead of guessing. Controller context now carries the last 12 messages. |
+| Tool loop | Tools stay available after the first round for multi-step work and after a failed batch. Read tools (`list_nodes`, `node_status`, `node_processes`) return to the model for a natural answer; only verified actions (`run_command`, `node_action`) may finish a single-step turn without another round. |
+| Failures | A nonzero exit, timeout or unavailable Node is an error to the model and the user. A failed action may be retried once with the same arguments; a repeated successful action is not executed again. Malformed tool arguments are reported back. |
+| Fallback safety | If a provider dies after an action ran, the Hub reports the verified partial result and stops. It no longer re-parses the request and executes a second action through the built-in fallback. |
+| Authority | Chat `run_command` is administrator-only at the offered-tools layer, the tool executor and the no-model parser. Controllers keep status, app and screen actions. Node `allowShell` remains a separate local gate. |
+| Progress | Tool turns emit honest status events (checking, opening, running, skipping a duplicate) instead of leaving the controller on "thinking" until the final text. Provider text streaming remains off for tool calls so schemas are not lost. |
+| Limits | Four model rounds and a 170-second turn budget remain. Hitting the limit returns the verified partial result with an explicit "ran out of steps" message, not invented completion. |
+
+**Tests added:** `tests/brain-conversation.test.mjs` (16 mocked scenarios:
+multi-step, recovery, timeout, duplicate suppression, unknown Node, controller
+shell refusal, provider death after action, context) and
+`tests/brain-live.test.mjs` (2 opt-in real local-model checks). Live tests run
+with `ATHENA_LIVE_MODEL=qwen2.5:7b npm run test:live`; the default suite skips
+them.
+
+**Verification target:** `npm run check`, `npm test`, `npm run smoke`. Automated
+mocked tests prove the loop contract, not a specific model's judgement. Record
+live-model results separately and never claim an untested provider passed.

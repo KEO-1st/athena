@@ -187,10 +187,14 @@ The key is stored **only** in `athena/data/config.json` on the hub. It is never
 sent to the browser. The app shows you which brain is live; if it is not ready,
 ATHENA still understands `status`, `run <command>`, `start comfy`, `scan`.
 
-The model is given seven tools — `list_nodes`, `node_status`, `run_command`,
-`node_action`, `manage_brain`, `see_screen`, `control_mouse_keyboard` — and a
-description of every machine's GPU, VRAM, temperature and services. Ask in
-plain language:
+The model is given eight tools — `list_nodes`, `node_status`, `node_processes`,
+`run_command`, `node_action`, `manage_brain`, `see_screen`,
+`control_mouse_keyboard` — and a description of every machine's GPU, VRAM,
+temperature and services. It keeps tools available across the steps of a
+multi-step request, reads each result, and asks before guessing when a target is
+ambiguous. Shell commands are available only to the direct-local Hub
+administrator; controllers can still inspect machines, open apps and use the
+screen. Ask in plain language:
 
 - "what's the 3060 doing?"
 - "run nvidia-smi on the render pc"
@@ -411,5 +415,7 @@ athena/
 - Desktop audio capture needs a Windows loopback device (Stereo Mix,
   VB-CABLE, etc.). It is not available on macOS/Linux nodes today.
 - Background jobs are shell processes; a node restart drops them.
-- The AI can run commands. That is the point. Keep `allowShell` off on machines
-  other people use, and keep API keys out of client-side code.
+- The AI can run commands on a Node whose local `allowShell` is on, but chat
+  shell access is limited to the direct-local Hub administrator. Controllers
+  can open apps, inspect state and use the screen. Keep `allowShell` off on
+  machines other people use, and keep API keys out of client-side code.

@@ -1177,7 +1177,7 @@ async function submitAsk(text) {
     if (streamed) live.commit(streamed);
     else live.wrap.remove();
     const message = error?.name === "TimeoutError" || /aborted/i.test(String(error?.message || ""))
-      ? "ATHENA did not answer within two minutes. The provider or Node did not respond; the request was stopped."
+      ? "ATHENA did not answer within three minutes. The provider or Node did not respond; the request was stopped."
       : String(error.message || error);
     addMessage("athena", message);
   } finally {

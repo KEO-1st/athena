@@ -35,6 +35,9 @@ const config = {
   brain: { provider: "openai", model: "gpt-4o-mini", apiKey: "test-key", baseUrl: "http://127.0.0.1:9/v1" },
 };
 
+/* Only the Hub PC's administrator may run shell commands in a chat turn. */
+const admin = { status: () => ({ ok: true }), start: () => ({ ok: true }) };
+
 const nodes = [
   {
     id: "node_1",
@@ -99,6 +102,7 @@ test("a multi-step request keeps tools available and observes each result", asyn
       config,
       registry: registry({ run: async () => ({ state: "done", code: 0, output: "GPU 42C" }) }),
       history: [],
+      admin,
       onStatus: (line) => statuses.push(line),
     });
     assert.equal(stub.calls.length, 3, "three model rounds: plan, observe, answer");
@@ -135,6 +139,7 @@ test("a failed command is reported as failed and the model can recover", async (
         },
       }),
       history: [],
+      admin,
     });
     assert.ok(stub.calls[1].body.tools?.length, "a failed step keeps tools available for a safe retry");
     assert.match(JSON.stringify(stub.calls[1].body.messages), /exited with code 1/);
@@ -165,6 +170,7 @@ test("a single failed command is retried before the answer is composed", async (
         },
       }),
       history: [],
+      admin,
     });
     assert.equal(runCalls, 1, "the test does not retry a command on its own");
     assert.equal(answer.actions[0].ok, false);
@@ -298,6 +304,185 @@ test("conversation context from previous turns reaches the model", async () => {
     const messages = stub.calls[0].body.messages;
     assert.ok(messages.some((entry) => entry.role === "user" && /Which node should render/.test(entry.content)));
     assert.ok(messages.some((entry) => entry.role === "assistant" && /better choice/.test(entry.content)));
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a controller cannot run shell commands through the model", async () => {
+  let ran = 0;
+  const stub = stubProvider((body, index) => {
+    if (index === 0) return toolCall("run_command", { node: "Rig", command: "whoami" });
+    return text("Shell commands are limited to the Hub administrator.");
+  });
+  try {
+    const answer = await ask({
+      text: "run whoami on Rig",
+      config,
+      registry: registry({
+        run: async () => {
+          ran += 1;
+          return { state: "done", code: 0, output: "controller" };
+        },
+      }),
+      history: [],
+      admin: null,
+    });
+    assert.equal(ran, 0, "the controller never reached the node's shell");
+    assert.equal(answer.actions[0].ok, false);
+    assert.match(JSON.stringify(stub.calls[1].body.messages), /Hub administrator/);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a controller cannot run shell commands through the no-model fallback", async () => {
+  let ran = 0;
+  const answer = await ask({
+    text: "run whoami on Rig",
+    config: { provider: "off" },
+    registry: registry({
+      run: async () => {
+        ran += 1;
+        return { state: "done", code: 0, output: "controller" };
+      },
+    }),
+    history: [],
+    admin: null,
+  });
+  assert.equal(ran, 0);
+  assert.match(answer.reply, /Hub administrator/);
+  assert.equal(answer.actions.length, 0);
+});
+
+test("a repeated successful action runs once, not twice", async () => {
+  let ran = 0;
+  const stub = stubProvider((body, index) => {
+    if (index === 0) return toolCall("run_command", { node: "Rig", command: "whoami" });
+    if (index === 1) return toolCall("run_command", { node: "Rig", command: "whoami" });
+    return text("Checked it once; the account is the same.");
+  });
+  try {
+    const answer = await ask({
+      text: "Run whoami on Rig, then check the result.",
+      config,
+      registry: registry({
+        run: async () => {
+          ran += 1;
+          return { state: "done", code: 0, output: "controller" };
+        },
+      }),
+      history: [],
+      admin,
+    });
+    assert.equal(ran, 1, "the duplicate call is answered from the first result");
+    assert.equal(answer.actions.length, 1);
+    assert.match(JSON.stringify(stub.calls[2].body.messages), /already succeeded/);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a timed-out command can be retried, and its first failure is reported honestly", async () => {
+  let runs = 0;
+  const stub = stubProvider((body, index) => {
+    if (index === 0) return toolCall("run_command", { node: "Rig", command: "ping 10.0.0.1" });
+    if (index === 1) return toolCall("run_command", { node: "Rig", command: "ping 10.0.0.1" });
+    return text("The first attempt timed out; the retry completed.");
+  });
+  try {
+    const answer = await ask({
+      text: "Run ping 10.0.0.1 on Rig, then report what happened.",
+      config,
+      registry: registry({
+        run: async () => {
+          runs += 1;
+          return runs === 1 ? { state: "timeout", output: "" } : { state: "done", code: 0, output: "1 received" };
+        },
+      }),
+      history: [],
+      admin,
+    });
+    assert.equal(runs, 2, "a timeout gets one deliberate retry");
+    assert.equal(answer.actions[0].ok, false);
+    assert.match(JSON.stringify(stub.calls[1].body.messages), /still running when the time limit expired/);
+    assert.equal(answer.actions[1].ok, true);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a provider failure after a real action never re-runs the fallback", async () => {
+  let opened = 0;
+  let index = 0;
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => {
+    index += 1;
+    if (index === 1) {
+      return new Response(
+        JSON.stringify(toolCall("node_action", { node: "Rig", op: "open", args: { app: "notepad" } })),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    throw new Error("provider disconnected");
+  };
+  try {
+    const answer = await ask({
+      text: "Open Notepad on Rig, then check the result.",
+      config,
+      registry: registry({
+        action: async () => {
+          opened += 1;
+          return { ok: true, opened: "notepad.exe" };
+        },
+      }),
+      history: [],
+      admin,
+    });
+    assert.equal(opened, 1, "the built-in parser does not repeat the open");
+    assert.equal(answer.actions.length, 1);
+    assert.match(answer.reply, /stopped before finishing/i);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test("an unknown node is reported instead of invented", async () => {
+  const stub = stubProvider((body, index) => {
+    if (index === 0) return toolCall("node_status", { node: "Ghost" });
+    return text("There is no machine called Ghost on this network.");
+  });
+  try {
+    const answer = await ask({
+      text: "check the gpu on Ghost",
+      config,
+      registry: registry(),
+      history: [],
+    });
+    assert.equal(answer.actions[0].ok, false);
+    assert.match(JSON.stringify(stub.calls[1].body.messages), /Unknown node/);
+    assert.match(answer.reply, /no machine called Ghost/i);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("node discovery returns only linked machines", async () => {
+  const stub = stubProvider((body, index) => {
+    if (index === 0) return toolCall("list_nodes", {});
+    return text("Rig is the stronger renderer.");
+  });
+  try {
+    await ask({
+      text: "Compare the available nodes and tell me which is better for rendering.",
+      config,
+      registry: registry(),
+      history: [],
+    });
+    const toolPayload = stub.calls[1].body.messages.find((entry) => entry.role === "tool")?.content || "";
+    assert.match(toolPayload, /Rig/);
+    assert.match(toolPayload, /Laptop/);
+    assert.doesNotMatch(toolPayload, /Ghost|Unknown/);
   } finally {
     stub.restore();
   }

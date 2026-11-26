@@ -165,6 +165,11 @@ ATHENA is intentionally useful, which makes these boundaries load-bearing:
 8. **No cloud, telemetry or runtime dependencies.** The controller is plain
    HTML/CSS/JS with a service worker and no build step. Do not add a framework,
    bundler, database or npm runtime dependency without an explicit request.
+9. **Chat shell is administrator-only.** `run_command` is removed from a
+   controller's offered tools and rejected again in `toolResult`; the built-in
+   no-model parser applies the same rule. Node `allowShell` remains a local
+   setting and still gates the Node itself. Do not "fix" a controller shell
+   refusal by trusting a UI flag, the JSON body or a model request.
 
 ---
 
@@ -274,7 +279,8 @@ packaging and protocol negotiation, the 3.1 reliability/security/controller
 sprint (direct-local admin authority, controller redaction, per-controller
 conversations, bounded model calls, screen-helper recovery, honest audio/TTS),
 and the 3.2 brain sprint (multi-step tool loop, failure recovery, clarification,
-conversation-aware tool gating, progress events and honest nonzero exits).
+conversation-aware tool gating, progress events, honest nonzero exits,
+duplicate-action suppression and administrator-only chat shell).
 
 Planned but **not implemented** — do not start unless the task explicitly asks:
 
