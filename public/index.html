@@ -13,6 +13,7 @@
 <link rel="apple-touch-icon" href="/icons/icon-180.png" />
 <link rel="icon" href="/icons/icon-192.png" />
 <link rel="stylesheet" href="/styles.css" />
+<link rel="stylesheet" href="/design.css" />
 <title>ATHENA Hub</title>
 <style>
   /* boot: black before the stylesheet paints, so there is no white flash */
@@ -409,35 +410,51 @@
         </div>
       </div>
 
-      <div class="panel" data-admin-only>
-        <p class="micro gold-line">THE MIND</p>
+      <div class="panel model-center" data-admin-only>
+        <header class="panel-head">
+          <div>
+            <p class="micro gold-line">MODEL CENTER</p>
+            <h3 class="panel-title">Intelligence</h3>
+          </div>
+          <span class="badge" id="model-active">CHECKING</span>
+        </header>
         <p class="micro dim" id="brain-detail">checking…</p>
+        <div class="provider-grid" id="provider-grid"></div>
         <div class="actions">
-          <button class="btn tiny solid" id="brain-install">INSTALL BRAIN</button>
-          <button class="btn tiny" id="brain-upgrade">UPGRADE BRAIN</button>
+          <button class="btn tiny solid" id="brain-install">INSTALL LOCAL BRAIN</button>
+          <button class="btn tiny" id="brain-upgrade">UPGRADE LOCAL BRAIN</button>
         </div>
         <label class="check"><input type="checkbox" id="brain-vision" /><span class="micro">ALSO INSTALL A VISION MODEL — LETS ATHENA READ SCREENS</span></label>
         <p class="micro dim" id="brain-state"></p>
         <pre class="code" id="brain-log" hidden></pre>
-        <details open>
-          <summary class="micro dim">SWITCH BRAIN</summary>
-          <label class="field"><span class="micro dim">INSTALLED MODELS ON THIS HUB</span>
-            <select id="cfg-model-pick" disabled><option value="">checking…</option></select>
-          </label>
+        <div class="model-config">
           <label class="field"><span class="micro dim">PROVIDER</span>
             <select id="cfg-provider">
-              <option value="auto">AUTO (local Ollama, else API)</option>
-              <option value="ollama">OLLAMA (local, free)</option>
-              <option value="openai">OPENAI-COMPATIBLE (key)</option>
-              <option value="gemini">GEMINI (key)</option>
-              <option value="off">OFF (built-in commands)</option>
+              <option value="auto">AUTO — local Ollama, otherwise a saved key</option>
+              <option value="ollama">OLLAMA — local, free</option>
+              <option value="openai">OPENAI</option>
+              <option value="gemini">GOOGLE GEMINI</option>
+              <option value="deepseek">DEEPSEEK</option>
+              <option value="anthropic">ANTHROPIC</option>
+              <option value="groq">GROQ</option>
+              <option value="openrouter">OPENROUTER</option>
+              <option value="custom">CUSTOM OPENAI-COMPATIBLE</option>
+              <option value="off">OFF — built-in commands only</option>
             </select>
           </label>
           <label class="field"><span class="micro dim">MODEL</span><input id="cfg-model" placeholder="qwen2.5:7b / gpt-4o-mini / gemini-2.0-flash" /></label>
-          <label class="field"><span class="micro dim">BASE URL (OPTIONAL)</span><input id="cfg-base" placeholder="https://api.openai.com/v1" /></label>
-          <label class="field"><span class="micro dim">API KEY (STORED ON THIS HUB ONLY)</span><input id="cfg-key" type="password" placeholder="sk-…" autocomplete="off" /></label>
-          <button class="btn tiny solid" id="cfg-save">SAVE</button>
-        </details>
+          <label class="field"><span class="micro dim">INSTALLED / AVAILABLE MODELS</span>
+            <select id="cfg-model-pick" disabled><option value="">press LOAD MODELS</option></select>
+          </label>
+          <label class="field"><span class="micro dim">BASE URL</span><input id="cfg-base" placeholder="filled from the provider" /></label>
+          <label class="field"><span class="micro dim">API KEY — STORED ON THIS HUB ONLY, NEVER SENT TO NODES</span><input id="cfg-key" type="password" placeholder="leave blank to keep the saved key" autocomplete="off" /></label>
+          <div class="actions">
+            <button class="btn tiny" id="cfg-models-load">LOAD MODELS</button>
+            <button class="btn tiny" id="cfg-test">TEST CONNECTION</button>
+            <button class="btn tiny solid" id="cfg-save">SAVE</button>
+          </div>
+          <p class="micro dim" id="provider-test-state">A TEST SENDS ONE REAL, TINY MESSAGE. THE KEY IS USED ONCE AND NOT SAVED.</p>
+        </div>
       </div>
 
       <div class="panel">

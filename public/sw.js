@@ -2,7 +2,7 @@
    __ATHENA_VERSION__ is replaced by the hub from version.json, so the cache
    key can never disagree with the assets index.html asks for. */
 const VERSION = "athena-__ATHENA_VERSION__";
-const SHELL = ["/styles.css", "/app.js", "/speech.mjs", "/screen-coords.mjs", "/manifest.webmanifest", "/icons/icon-192.png"];
+const SHELL = ["/styles.css", "/design.css", "/app.js", "/speech.mjs", "/screen-coords.mjs", "/manifest.webmanifest", "/icons/icon-192.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(VERSION).then((cache) => cache.addAll(SHELL)).catch(() => undefined));

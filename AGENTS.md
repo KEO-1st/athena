@@ -23,7 +23,9 @@ A sentence in chat can become real tool calls on the right machine.
 | **Node** (`KEO-1st/athena-node`, `athena-node.mjs`) | Every machine being controlled | Shell, processes, software installs, screen capture, mouse/keyboard, audio, ComfyUI tunnel |
 | **Controller** (`public/`) | Phone, tablet or another PC | PWA chat, Jobs, Nodes, Screen; never Hub administration |
 
-**Current release:** Hub **3.3.0**, Node **0.3.0**, Node protocol **1**.
+**Current release:** Hub **3.3.0**, Node **0.3.0**, Node protocol **1**, delivered as
+product generation **v0.1**. The software versions remain independent of the
+product-generation label; do not rewrite one to match the other.
 Zero runtime npm dependencies, Node.js 20+, JSON storage, no build step for the
 controller. Everything stays on the local network: no cloud, account or
 telemetry.
@@ -45,7 +47,9 @@ lib/                    Hub modules
   nodes.mjs             Node registry, status refresh, screen framing
   discover.mjs          LAN discovery + nodeFetch (protocol header)
   jobs.mjs              Job queue, recovery, cancellation
-  brain.mjs             Model providers, prompting, tool loop, timeouts
+  brain.mjs             Prompting, deterministic routing, tool loop, timeouts
+  providers.mjs         Provider adapters, capabilities, model discovery, tests
+  secrets.mjs           Owner-only key storage, separate from config.json
   brain-install.mjs     Ollama detection/install/upgrade
   audio-sources.mjs     Microphone vs desktop (loopback) classification
   node-protocol.mjs     Hub/Node protocol compatibility
@@ -54,13 +58,13 @@ lib/                    Hub modules
   integrations.mjs      Hub-level integrations
   identity.mjs          Fast deterministic identity answers
   version.mjs           Version reading helpers
-public/                 PWA served by the Hub (index.html, app.js, styles.css, sw.js)
+public/                 PWA served by the Hub (index.html, app.js, styles.css, design.css, sw.js)
 node/                   Legacy Hub-side Node snapshot; do not use as Node source
 athena-node/            Separate Node product checkout (gitignored by the Hub)
   athena-node.mjs       Node HTTP server, actions, pairing, auth
   host-screen.ps1       Windows screen capture (.NET)
   host-input.ps1        Windows mouse/keyboard (user32)
-  panel.html            Adaptive tabbed Node panel
+  panel.html            Adaptive Node panel: overview, machine, processes, permissions, diagnostics
   protocol.mjs          Node-side protocol constants
   version.json          Independent Node version (do not tie to the Hub)
 tests/                  node:test suites, check, smoke and helpers
@@ -282,11 +286,20 @@ sprint (direct-local admin authority, controller redaction, per-controller
 conversations, bounded model calls, screen-helper recovery, honest audio/TTS),
 the 3.2 brain sprint (multi-step tool loop, failure recovery, clarification,
 conversation-aware tool gating, progress events, honest nonzero exits,
-duplicate-action suppression and administrator-only chat shell), and the
+duplicate-action suppression and administrator-only chat shell), the
 coordinated 3.3 / Node 0.3 sprint (single-window Node lifecycle, safe permission
 defaults, adaptive panel, measured hardware inventory and detail view, direct
 read-only hardware answers, incremental browser speech, controller reconnect
-backoff and network-first shell assets).
+backoff and network-first shell assets), and the **v0.1 delivery sprint**:
+
+- deterministic routing for screenshots, window lists, Node status and app
+  launches, including persisted Node aliases and structured execution results;
+- verified launches that separate process, created window and visible window;
+- multi-provider adapters (Ollama, OpenAI, Gemini, DeepSeek, Anthropic, Groq,
+  OpenRouter, custom), per-provider keys in `secrets.json`, masking, model
+  discovery, real connection tests and provider-specific diagnostics;
+- a shared design layer (`public/design.css`) and desktop Hub rail, a Model
+  Center, a Node process inspector, and clearer controller/mobile states.
 
 Planned but **not implemented** — do not start unless the task explicitly asks:
 
@@ -301,13 +314,17 @@ Planned but **not implemented** — do not start unless the task explicitly asks
 - **Phase 8:** remote access beyond the LAN.
 - **Phase 9:** vision/voice depth.
 - **Phase 10:** Task Proposal UI, execution monitor, deeper integrations.
-- **Phase 11:** major visual redesign and advanced motion.
+- **Phase 11:** remaining advanced motion and future surfaces. The v0.1 shell,
+  design tokens and Model Center are implemented; further visual polish must
+  follow `docs/ATHENA_V0_1_DESIGN_SYSTEM.md` rather than inventing a new theme.
 
 Explicit non-goals: rewriting the controller in a framework or adding a build
 step; replacing JSON with a database by default; cross-platform screen/input in
 the near term; multi-user organisation roles; a public marketplace or remote
 code-execution API; native mobile apps; automatic merging, pushing, deployment
-or Node updates; building Phase 10/11 surfaces before their foundations.
+or Node updates; building Phase 10/11 surfaces before their foundations. The
+v0.1 Store/Library, ATHENA Link, AEGIS and aggressive system optimization are
+designed for but intentionally not implemented.
 
 ---
 

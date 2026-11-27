@@ -156,7 +156,7 @@ PC SOUND is unavailable — it reports that a loopback device is required.
 
 ## 4 · Give it a brain
 
-Open **SETTINGS → THE MIND** and press **INSTALL BRAIN**. That is the whole setup:
+Open **SETTINGS → MODEL CENTER** and press **INSTALL LOCAL BRAIN**. That is the whole local setup:
 
 1. Ollama is installed through winget (or the official installer if winget is
    missing), and started;
@@ -171,18 +171,34 @@ the chat — both work before any brain exists, because they are built-in intent
 and the model gets `manage_brain` as a tool once it is alive.
 
 Tick **also install a vision model** to add `qwen2.5vl` so `see_screen` can
-truly read a screen. Or point the hub at any other provider by hand:
+truly read a screen. Or choose any provider in **MODEL CENTER** and save your
+own key:
 
 | Provider | What it is | What you need |
 | --- | --- | --- |
 | **Ollama** | free, local, private | install Ollama, `ollama pull qwen2.5:7b` |
-| **OpenAI-compatible** | any `/chat/completions` endpoint: OpenAI, Groq, OpenRouter, LM Studio, Freebuff API | base URL + API key |
-| **Gemini** | Google's compatibility endpoint | Gemini API key |
+| **OpenAI** | OpenAI's chat API | API key |
+| **Google Gemini** | Gemini's OpenAI-compatible endpoint | Gemini API key |
+| **DeepSeek** | DeepSeek chat and tools | API key |
+| **Anthropic** | Claude, through its native Messages API | API key |
+| **Groq** | fast hosted open models | API key |
+| **OpenRouter** | many models through one key | API key |
+| **Custom** | any `/chat/completions` endpoint, including LM Studio or a company gateway | base URL + optional key |
 | **Off** | built-in command parser | nothing |
 
-The key is stored **only** in `athena/data/config.json` on the hub. It is never
-sent to the browser. The app shows you which brain is live; if it is not ready,
-ATHENA still understands `status`, `run <command>`, `start comfy`, `scan`.
+Each provider keeps its own model, base URL and key. **LOAD MODELS** asks the
+provider what it actually offers; **TEST CONNECTION** sends one tiny real
+request and reports the latency, tool support and vision support. A failed test
+says whether the key was rejected, the model was missing, the provider was rate
+limited or the request timed out.
+
+Keys live in `athena/data/secrets.json`, separate from `config.json`, written
+with owner-only permissions where the platform supports it. The API only ever
+returns a mask such as `sk-…7890`, controllers never receive the provider list,
+and the full key is never sent to a Node, a chat log or browser storage. Keys
+saved by older builds in `config.json` are migrated automatically and removed
+from that file on the next save. The app shows which brain is live; if it is not
+ready, ATHENA still understands `status`, `run <command>`, `start comfy`, `scan`.
 
 The model is given ten tools — `list_nodes`, `node_status`, `node_processes`,
 `run_command`, `node_action`, `manage_brain`, `see_screen`,
@@ -190,7 +206,14 @@ The model is given ten tools — `list_nodes`, `node_status`, `node_processes`,
 description of every machine's CPU, installed / usable / available RAM, GPU,
 VRAM, disks, displays, audio, OS, installed apps, temperature and services. Specifications, GPU status, installed applications
 and "which Node has the most available RAM?" are answered directly from measured
-Node values (read-only for controllers), without asking a model to invent them. It keeps tools available across the steps of a
+Node values (read-only for controllers), without asking a model to invent them.
+The same deterministic path handles the failures that used to depend on a model
+cooperating: **list windows**, **take a screenshot**, **check a Node** and
+**open an application**. Node names resolve through the registry, and persisted
+aliases (`Node 1`, `Node 2`, …) mean "Node 2" is a real machine rather than a
+model guess. Opening an app reports the process, whether a window was created
+and whether that window is actually visible; a process without a visible window
+is reported as partial, never as "opened". It keeps tools available across the steps of a
 multi-step request, reads each result, avoids repeating a step that already
 succeeded, verifies the outcome, and asks before guessing when a target is
 ambiguous. Browser actions attach a fresh screenshot as evidence, and a failed
@@ -383,7 +406,9 @@ athena/
   AGENTS.md             instructions for any coding agent or developer
   server.mjs            hub
   lib/                  store · discovery · registry · jobs · brain
-  public/               the PWA (index, app.js, styles.css, sw, icons)
+  lib/providers.mjs      provider adapters (Ollama, OpenAI, Gemini, Anthropic, …)
+  lib/secrets.mjs        owner-only API-key storage, separate from config.json
+  public/               the PWA (index, app.js, styles.css, design.css, sw, icons)
   athena-node/          the separate Node product repository (its own releases)
   node/                 legacy Hub-side snapshot; not the Node source of truth
   data/                 config, keys, sessions, nodes, jobs  (gitignored)
@@ -426,6 +451,13 @@ athena/
 - Desktop audio capture needs a Windows loopback device (Stereo Mix,
   VB-CABLE, etc.). It is not available on macOS/Linux nodes today.
 - Background jobs are shell processes; a node restart drops them.
+- Provider support is a working adapter, not a promise about every model. Tool
+  calling and vision depend on the chosen model; MODEL CENTER reports what it
+  can detect, and images are only attached when the model is recognised as a
+  vision model. A provider test is the honest check for your own account.
+- The v0.1 Store/Library, ATHENA Link, AEGIS and a full system optimizer are
+  designed for but **not implemented**. The Node does not yet cap GPU, RAM or
+  network use; it measures and reports hardware instead of inventing controls.
 - The AI can run commands on a Node whose local `allowShell` is on, but chat
   shell access is limited to the direct-local Hub administrator. Controllers
   can inspect state, open apps and use the screen; running commands, installing

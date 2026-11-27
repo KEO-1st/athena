@@ -47,7 +47,7 @@ function registryReturning(result) {
   };
 }
 
-test("a verified launch is reported as success without a second model round", async () => {
+test("a verified launch is reported as success without a model round", async () => {
   const stub = stubBrain([toolCall("node_action", { node: "Rig", op: "open", args: { app: "task manager" } })]);
   try {
     const answer = await ask({
@@ -56,9 +56,10 @@ test("a verified launch is reported as success without a second model round", as
       registry: registryReturning({ ok: true, opened: "Taskmgr.exe", verified: "process" }),
       history: [],
     });
-    assert.equal(stub.calls.length, 1, "the verified action is conclusive");
-    assert.equal(answer.meta.path, "model:action");
-    assert.match(answer.reply, /Opened Taskmgr\.exe on Rig/);
+    assert.equal(stub.calls.length, 0, "an unambiguous launch is routed without waiting for a model");
+    assert.equal(answer.meta.path, "deterministic:open");
+    assert.match(answer.reply, /task manager is open on Rig/i);
+    assert.match(answer.reply, /process verified/i);
     assert.equal(answer.actions[0].ok, true);
   } finally {
     stub.restore();
@@ -78,9 +79,9 @@ test("a failed launch is never reported as success", async () => {
       history: [],
     });
     assert.equal(answer.actions[0].ok, false);
-    assert.match(answer.reply, /failed/i);
+    assert.match(answer.reply, /not opened/i);
     assert.match(answer.reply, /did not open anything/);
-    assert.doesNotMatch(answer.reply, /^Done/i);
+    assert.doesNotMatch(answer.reply, /is open|^Done/i);
   } finally {
     stub.restore();
   }

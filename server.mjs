@@ -23,7 +23,9 @@ import { readJson, writeJson, accessCode, sha256, randomToken, safeEqual, id as 
 import { discover, lanAddresses, nodeFetch, DISCOVERY_PORT } from "./lib/discover.mjs";
 import { Registry } from "./lib/nodes.mjs";
 import { Jobs } from "./lib/jobs.mjs";
-import { ask, probeBrain, warmBrain, invalidateProbeCache } from "./lib/brain.mjs";
+import { ask, probeBrain, warmBrain, invalidateProbeCache, providerState } from "./lib/brain.mjs";
+import { PROVIDER_IDS, listProviderModels, resolveProviderSettings, testProvider } from "./lib/providers.mjs";
+import { Secrets, withoutSecrets } from "./lib/secrets.mjs";
 import { APPS } from "./lib/apps.mjs";
 import { Integrations } from "./lib/integrations.mjs";
 import { isPrivilegedNodeOp } from "./lib/node-privilege.mjs";
@@ -44,6 +46,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DATA = process.env.ATHENA_DATA_DIR ? path.resolve(process.env.ATHENA_DATA_DIR) : path.join(HERE, "data");
 const PUBLIC = path.join(HERE, "public");
 const CONFIG_FILE = path.join(DATA, "config.json");
+const SECRETS_FILE = path.join(DATA, "secrets.json");
 const KEYS_FILE = path.join(DATA, "keys.json");
 const SESSIONS_FILE = path.join(DATA, "sessions.json");
 const NODES_FILE = path.join(DATA, "nodes.json");
@@ -68,6 +71,7 @@ const DEFAULTS = {
     model: "",
     baseUrl: "",
     apiKey: "",
+    providers: {},
   },
   tts: {
     provider: "browser",
@@ -81,9 +85,19 @@ const savedConfig = readJson(CONFIG_FILE, {});
 const config = {
   ...DEFAULTS,
   ...savedConfig,
-  brain: { ...DEFAULTS.brain, ...(savedConfig.brain || {}) },
+  brain: { ...DEFAULTS.brain, ...(savedConfig.brain || {}), providers: { ...(savedConfig.brain?.providers || {}) } },
   tts: { ...DEFAULTS.tts, ...(savedConfig.tts || {}) },
 };
+
+/* Keys are kept out of config.json. Older installs that saved a key there are
+   migrated once, then the config copy is blanked on the next save. */
+const secrets = new Secrets(SECRETS_FILE);
+if (savedConfig.brain?.apiKey) {
+  const legacyId = savedConfig.brain.provider === "auto" ? "openai" : savedConfig.brain.provider;
+  if (PROVIDER_IDS.includes(legacyId)) secrets.setProvider(legacyId, savedConfig.brain.apiKey);
+}
+if (savedConfig.tts?.apiKey) secrets.setTts(savedConfig.tts.apiKey);
+secrets.hydrate(config.brain, config.tts);
 config.sessionDays = clamp(Math.round(Number(config.sessionDays) || DEFAULT_SESSION_DAYS), 1, MAX_SESSION_DAYS);
 config.rememberControllers = config.rememberControllers !== false;
 if (!config.code) config.code = accessCode(6);
@@ -92,7 +106,7 @@ if (!fs.existsSync(CONFIG_FILE)) writeJson(CONFIG_FILE, config);
 writeCodeFile();
 
 function saveConfig() {
-  writeJson(CONFIG_FILE, config);
+  writeJson(CONFIG_FILE, withoutSecrets(config));
   writeCodeFile();
 }
 
@@ -408,8 +422,12 @@ function stateFor(base, admin) {
     languageCode: config.tts.languageCode,
     configured: Boolean(config.tts.apiKey),
   };
+  /* A controller gets health, never even a masked key. */
+  const brainForCaller = admin ? base.brain : (({ keyMask, ...rest }) => rest)(base.brain || {});
   return {
     ...base,
+    brain: brainForCaller,
+    ...(admin ? { providers: providerState(config.brain) } : {}),
     admin,
     ...(admin
       ? {
@@ -1206,17 +1224,13 @@ const server = http.createServer(async (req, res) => {
           return json(res, 400, { error: "brain must be an object." });
         }
         const provider = String(body.brain.provider ?? config.brain.provider).trim().toLowerCase();
-        if (!["auto", "ollama", "openai", "gemini", "off"].includes(provider)) {
+        if (!["auto", "off", ...PROVIDER_IDS].includes(provider)) {
           return json(res, 400, { error: `Unknown provider "${provider}".` });
         }
-        config.brain.provider = provider;
-        if ("model" in body.brain) config.brain.model = String(body.brain.model ?? "").trim();
-        /* A blank password field means "leave the saved key alone". Saving an
-           unrelated setting used to erase the provider key. */
-        if ("apiKey" in body.brain && String(body.brain.apiKey ?? "").trim()) {
-          config.brain.apiKey = String(body.brain.apiKey).trim();
-        }
-        if (body.brain.clearApiKey === true) config.brain.apiKey = "";
+        const providerId = provider === "auto" ? "openai" : provider;
+        config.brain.providers = config.brain.providers && typeof config.brain.providers === "object" ? config.brain.providers : {};
+        const entry = { ...(config.brain.providers[providerId] || {}) };
+        if ("model" in body.brain) entry.model = String(body.brain.model ?? "").trim();
         if ("baseUrl" in body.brain) {
           const baseUrl = String(body.brain.baseUrl ?? "").trim();
           if (baseUrl) {
@@ -1230,8 +1244,31 @@ const server = http.createServer(async (req, res) => {
               return json(res, 400, { error: "Base URL must be a full http(s) URL." });
             }
           }
-          config.brain.baseUrl = baseUrl;
+          entry.baseUrl = baseUrl;
         }
+        config.brain.providers[providerId] = entry;
+        config.brain.provider = provider;
+        config.brain.model = entry.model || "";
+        config.brain.baseUrl = entry.baseUrl || "";
+        /* A blank password field means "leave the saved key alone". Saving an
+           unrelated setting must not erase the provider key. Keys go to the
+           secrets file, never into config.json or a broadcast. */
+        const suppliedKey = String(body.brain.apiKey ?? "").trim();
+        if (body.brain.clearApiKey === true) {
+          secrets.setProvider(providerId, "");
+          config.brain.apiKey = "";
+        } else if (suppliedKey) {
+          if (provider === "ollama" || provider === "off") {
+            return json(res, 400, { error: "That provider does not use an API key." });
+          }
+          secrets.setProvider(providerId, suppliedKey);
+          config.brain.apiKey = suppliedKey;
+        } else if (provider !== "ollama" && provider !== "off") {
+          config.brain.apiKey = secrets.getProvider(providerId);
+        } else {
+          config.brain.apiKey = "";
+        }
+        config.brain.providers[providerId] = { ...entry, ...(config.brain.apiKey ? { apiKey: config.brain.apiKey } : {}) };
       }
 
       if (body.tts !== undefined) {
@@ -1245,8 +1282,14 @@ const server = http.createServer(async (req, res) => {
         config.tts.provider = provider;
         if ("voice" in body.tts) config.tts.voice = String(body.tts.voice ?? "").trim().slice(0, 80) || DEFAULTS.tts.voice;
         if ("languageCode" in body.tts) config.tts.languageCode = String(body.tts.languageCode ?? "").trim().slice(0, 20) || DEFAULTS.tts.languageCode;
-        if ("apiKey" in body.tts && String(body.tts.apiKey ?? "").trim()) config.tts.apiKey = String(body.tts.apiKey).trim();
-        if (body.tts.clearApiKey === true) config.tts.apiKey = "";
+        if ("apiKey" in body.tts && String(body.tts.apiKey ?? "").trim()) {
+          config.tts.apiKey = String(body.tts.apiKey).trim();
+          secrets.setTts(config.tts.apiKey);
+        }
+        if (body.tts.clearApiKey === true) {
+          config.tts.apiKey = "";
+          secrets.setTts("");
+        }
       }
 
       invalidateProbeCache();
@@ -1259,6 +1302,38 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "/api/brain") {
       return json(res, 200, await probeBrain(config.brain));
+    }
+
+    if (route === "/api/providers" && method === "GET") {
+      if (!requireAdmin(req, res)) return;
+      const state = providerState(config.brain);
+      if (url.searchParams.get("models") === "1") {
+        const id = String(url.searchParams.get("provider") || config.brain.provider || "openai").toLowerCase();
+        const listed = await listProviderModels(resolveProviderSettings(config.brain, id));
+        return json(res, 200, { ...state, models: listed.models, modelsError: listed.error });
+      }
+      return json(res, 200, state);
+    }
+
+    if (route === "/api/providers/test" && method === "POST") {
+      if (!requireAdmin(req, res)) return;
+      const body = await readBody(req);
+      const id = String(body.provider || config.brain.provider || "openai").toLowerCase();
+      if (!PROVIDER_IDS.includes(id) || id === "ollama") {
+        return json(res, 400, { error: "Choose a remote provider to test." });
+      }
+      const saved = resolveProviderSettings(config.brain, id);
+      const settings = {
+        ...saved,
+        model: String(body.model || saved.model || "").trim(),
+        baseUrl: String(body.baseUrl || saved.baseUrl || "").trim().replace(/\/+$/, ""),
+        apiKey: String(body.apiKey || saved.apiKey || "").trim(),
+      };
+      if (!settings.apiKey) return json(res, 400, { error: "No API key is saved for that provider." });
+      if (!settings.model) return json(res, 400, { error: "No model is selected for that provider." });
+      const result = await testProvider(settings);
+      /* A test key is used once and never stored: the person must press SAVE. */
+      return json(res, result.ok ? 200 : 502, result);
     }
 
     if (route === "/api/brain/install" && method === "GET") {

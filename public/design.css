@@ -1,0 +1,262 @@
+/* ═══════════════════════════════════════════════════════════════════
+   ATHENA · DESIGN SYSTEM v0.1
+   Loaded after styles.css. This layer owns layout, spacing, surfaces and
+   component rules; styles.css keeps the cosmic atmosphere and artwork.
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* type scale */
+  --text-2xs: 9px;
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-md: 15px;
+  --text-lg: 20px;
+  --text-xl: clamp(26px, 3.4vw, 38px);
+  --text-display: clamp(44px, 7vw, 78px);
+
+  /* surfaces */
+  --surface-0: #04050a;
+  --surface-1: rgba(10, 12, 19, 0.86);
+  --surface-2: rgba(15, 18, 27, 0.94);
+  --surface-3: rgba(22, 26, 38, 0.96);
+  --line: rgba(230, 233, 239, 0.09);
+  --line-strong: rgba(216, 169, 78, 0.34);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --rail: 228px;
+  --content: 1440px;
+}
+
+html { background: var(--surface-0); }
+
+body {
+  font-size: var(--text-md);
+  line-height: 1.6;
+}
+
+h1, h2, h3, h4, p { margin: 0; }
+h1, h2, h3, h4 { font-weight: 400; letter-spacing: 0.04em; }
+
+.micro {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.18em;
+  line-height: 1.7;
+  text-transform: uppercase;
+}
+
+.gold-line { color: var(--accent-l); }
+
+/* ───────────────────────────────────────────────────────── app shell */
+
+.app {
+  max-width: var(--content);
+  padding: max(var(--space-3), env(safe-area-inset-top)) clamp(var(--space-3), 2.4vw, var(--space-5)) 0;
+}
+
+.top {
+  padding: var(--space-2) 0 var(--space-3);
+  min-height: 62px;
+}
+
+.view { animation: viewIn 0.32s cubic-bezier(0.22, 0.85, 0.25, 1) both; }
+@keyframes viewIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+.view-head {
+  align-items: center;
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.view-head h2 { font-size: var(--text-xl); letter-spacing: 0.06em; }
+
+.panel {
+  border-radius: var(--radius-md);
+  border-color: var(--line);
+  background: var(--surface-1);
+}
+
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.panel-title {
+  font-size: var(--text-lg);
+  margin-top: 2px;
+  color: var(--ink);
+}
+
+.card { border-radius: var(--radius-md); }
+.card:hover { transform: translateY(-1px); }
+
+.btn { border-radius: var(--radius-sm); min-height: 40px; }
+input, select, textarea { border-radius: var(--radius-sm); min-height: 42px; }
+input[type="range"] { min-height: 20px; }
+
+:focus-visible {
+  outline: 2px solid var(--accent-hi);
+  outline-offset: 2px;
+}
+
+/* ───────────────────────────────────────────────────────── model center */
+
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-3) 0 var(--space-4);
+}
+
+.provider-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: var(--space-3);
+  min-height: 96px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(20, 24, 35, 0.6), rgba(8, 9, 15, 0.7));
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, transform 0.2s;
+}
+.provider-card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.provider-card.active { border-color: var(--accent); background: linear-gradient(180deg, rgba(216, 169, 78, 0.14), rgba(8, 9, 15, 0.85)); }
+.provider-card .provider-name { font-size: var(--text-sm); letter-spacing: 0.06em; }
+.provider-card .micro { text-align: left; }
+.provider-card .provider-meta { margin-top: auto; color: var(--accent-l); letter-spacing: 0.14em; }
+
+.model-config {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+.model-config .field:nth-of-type(5) { grid-column: 1 / -1; }
+.model-config .actions { grid-column: 1 / -1; }
+.model-config #provider-test-state { grid-column: 1 / -1; color: var(--ink-soft); }
+
+/* ─────────────────────────────────────────────────────── desktop rail */
+
+@media (min-width: 1024px) {
+  .app {
+    display: grid;
+    grid-template-columns: var(--rail) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 0 var(--space-5);
+    height: 100vh;
+    min-height: 100vh;
+    padding-bottom: 0;
+  }
+  .top { grid-column: 1 / -1; grid-row: 1; }
+  #views { grid-column: 2; grid-row: 2; overflow-y: auto; padding: var(--space-4) var(--space-2) var(--space-6) 0; scrollbar-gutter: stable; }
+  .app > .tabs {
+    grid-column: 1;
+    grid-row: 2;
+    position: sticky;
+    top: 0;
+    align-self: start;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
+    margin: 0;
+    padding: var(--space-4) 0 0;
+    height: calc(100vh - 76px);
+    background: transparent;
+    border: 0;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .tabs::before {
+    content: "WORKSPACE";
+    padding: 0 var(--space-3) var(--space-3);
+    font-family: var(--mono);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.28em;
+    color: var(--dim);
+  }
+  .tabs button {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--space-3);
+    min-height: 44px;
+    padding: 10px var(--space-3);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    text-align: left;
+  }
+  .tabs button i { width: 18px; font-size: 15px; text-align: center; }
+  .tabs button span { font-size: var(--text-2xs); letter-spacing: 0.2em; }
+  .tabs button:hover { background: rgba(255, 255, 255, 0.03); border-color: var(--line); }
+  .tabs button.active {
+    background: linear-gradient(90deg, rgba(216, 169, 78, 0.13), transparent 90%);
+    border-color: var(--line);
+    color: var(--accent-hi);
+  }
+  .tabs button.active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 2px;
+    background: var(--accent-l);
+    box-shadow: 0 0 12px var(--glow-strong);
+  }
+  .tab-glide { display: none; }
+
+  .view { max-width: 1120px; }
+  .screens { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  .cards { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .hero-main { grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr); }
+  .core-stage .core { --core: min(22vw, 290px); }
+
+  .composer { position: sticky; bottom: var(--space-3); }
+  .toast { bottom: var(--space-6); }
+}
+
+@media (min-width: 1500px) {
+  .app { --rail: 250px; }
+}
+
+/* ─────────────────────────────────────────────────────────── mobile */
+
+@media (max-width: 1023px) {
+  .model-config { grid-template-columns: minmax(0, 1fr); }
+  .model-config .field:nth-of-type(5) { grid-column: auto; }
+}
+
+@media (max-width: 520px) {
+  .view-head { align-items: flex-start; }
+  .view-head h2 { font-size: 26px; }
+  .provider-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .provider-card { min-height: 88px; padding: var(--space-2); }
+  .panel-head { flex-direction: column; gap: var(--space-2); }
+  .composer { bottom: calc(68px + env(safe-area-inset-bottom)); }
+  .msg-shots img { max-height: 56vh; }
+}
+
+/* Reduced motion and battery: the rail, transitions and hover lifts are cheap,
+   but a device that asks for less motion gets a completely static shell. */
+@media (prefers-reduced-motion: reduce) {
+  .view { animation: none; }
+  .card:hover, .provider-card:hover, .btn:hover { transform: none; }
+}

@@ -38,7 +38,12 @@ workflow is in `AGENTS.md`.
 | `tests/software.test.mjs` | Result notes are surfaced, ComfyUI is labelled detection, PATH refresh and selected-node targeting are present. |
 | `tests/package.test.mjs` | Node package layout, `run-node.cmd` runtime/version resolution, identity outside program files, build manifest, no auto-updater wording, Hub `ATHENA Hub.exe` compilation and shell. |
 | `tests/speech.test.mjs` | Pronunciation normalisation, word-boundary chunking, voice ranking (Natural first, legacy last). |
-| `tests/hub.test.mjs` (shell) | No global Software tab, per-node software functions, Integrations and voice controls in SYSTEM. |
+| `tests/hub.test.mjs` (shell) | No global Software tab, per-node software functions, Integrations and voice controls in SYSTEM; a saved key is moved out of `config.json`, the provider list exposes only a mask, and unrelated saves preserve it. |
+| `tests/agent-reliability.test.mjs` | The exact reported failures with **no model configured**: node count, screenshot of Node 2 returning an image, real window list, app launch only after process + visible-window verification, partial launch, offline Node, node permission refusal, and an honest provider timeout with no action. |
+| `tests/providers.test.mjs` | Masked catalogue, per-provider settings isolation, Anthropic native message/tool mapping, provider-specific errors, model discovery. |
+| `tests/node-computer` (in `athena-node`) | Window enumeration/focus/close helpers, browser transport, and the opt-in real Chromium check (`ATHENA_TEST_COMPUTER=1 npm run test:computer`). |
+| `athena-node/tests/lifecycle.test.mjs` | Compiles the real Windows launcher and proves one owner/one agent through launch, second launch, restart and quit. It uses `ATHENA_LAUNCHER_NAMESPACE` so an unrelated running Node is not mistaken for a second test instance. |
+| `athena-node/tests/api.test.mjs` | Screen and input permissions gate the corresponding actions; an action cannot be widened by the Hub. |
 
 ### How isolation works
 
@@ -78,6 +83,18 @@ These depend on the host or a browser and are not automated:
 5. **PWA install / update** — install to the home screen, bump `version.json`,
    restart the hub, reload: the new shell must appear and the old cache must be
    gone.
+6. **Real provider accounts** — in SYSTEM → MODEL CENTER choose each provider
+   you own, paste the key, press LOAD MODELS and TEST CONNECTION. Confirm the
+   masked key survives a reload, that the key does not appear in
+   `data/config.json`, and that a controller receives no provider list. These
+   calls are not made by the automated suite (no account or key is assumed).
+7. **Real app launches** — on Windows ask "Open Calculator on Node 2" and
+   confirm the reply says a visible window was verified, then "List open
+   windows on Node 2" shows Calculator. Deny screen inspection on the Node and
+   confirm a screenshot request fails honestly rather than returning a URL.
+8. **Node process tab** — open PROCESSES, confirm the list matches Task Manager
+   closely enough for the top entries and that polling stops when the tab is
+   left. No process is killed by this panel.
 6. **Node panel** — on the node itself, the panel must load status after
    bootstrap; from another LAN device the panel shows NODE DOWN by design.
 7. **LAN access** — the hub answers only to its own hostnames and IPs. If the

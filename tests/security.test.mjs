@@ -171,6 +171,8 @@ test("every administrative endpoint refuses a normal controller session", async 
     ["GET", "/api/brain/install", undefined],
     ["POST", "/api/brain/install", {}],
     ["POST", "/api/brain/upgrade", {}],
+    ["GET", "/api/providers", undefined],
+    ["POST", "/api/providers/test", { provider: "openai" }],
     ["POST", "/api/integrations", { name: "controller", url: "http://127.0.0.1:1" }],
     ["POST", "/api/integrations/int_any", { name: "controller" }],
     ["POST", "/api/integrations/int_any/probe", {}],
@@ -190,6 +192,7 @@ test("every administrative endpoint refuses a normal controller session", async 
   assert.equal(state.json.sessions, null);
   assert.deepEqual(state.json.devices, []);
   assert.deepEqual(state.json.keys, []);
+  assert.equal(state.json.providers, undefined, "providers and their masks are administrator-only");
   assert.ok(!state.text.includes("Test Hub"), "administrator identity is not in controller state");
 });
 

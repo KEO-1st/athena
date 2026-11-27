@@ -131,7 +131,15 @@ test("saving unrelated settings does not erase a saved provider key", async () =
   });
   assert.equal(unrelated.status, 200);
   const config = JSON.parse(await fs.promises.readFile(`${hub.dir}/config.json`, "utf8"));
-  assert.equal(config.brain.apiKey, "sk-test-preserve");
+  assert.equal(config.brain.apiKey, "", "the saved config must never contain a key");
+  const secrets = JSON.parse(await fs.promises.readFile(`${hub.dir}/secrets.json`, "utf8"));
+  assert.equal(secrets.providers.openai, "sk-test-preserve");
+
+  const providers = await request(hub.port, "/api/providers", { headers: auth() });
+  assert.equal(providers.status, 200);
+  assert.ok(!providers.text.includes("sk-test-preserve"), "the provider list only exposes a mask");
+  assert.ok(providers.json.providers.some((entry) => entry.id === "openai" && entry.configured));
+  assert.match(providers.json.providers.find((entry) => entry.id === "openai").keyMask, /^sk-/);
 
   await request(hub.port, "/api/settings", {
     method: "POST",

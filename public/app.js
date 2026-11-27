@@ -336,6 +336,7 @@ function render() {
   renderJobs(state.jobs || []);
   renderIntegrations(state.integrations || []);
   renderKeys(state.keys || []);
+  renderModelCenter(state);
   renderConfig(state);
   renderSystem(state);
 }
@@ -607,6 +608,58 @@ function renderConfig(state) {
   return fillHubConfig(state);
 }
 
+/* ─────────────────────────────────────────────── model center */
+
+function providerInfo(id) {
+  const list = store.state?.providers?.providers || [];
+  if (id === "ollama") {
+    return { id: "ollama", label: "Ollama", model: store.state?.brain?.provider === "ollama" ? store.state.brain.model : "", defaultModel: "qwen2.5:7b", configured: true, keyMask: "", local: true };
+  }
+  return list.find((entry) => entry.id === id) || null;
+}
+
+function renderModelCenter(state) {
+  const grid = $("#provider-grid");
+  if (!grid) return;
+  const catalog = state?.providers?.providers || [];
+  const active = String(state?.brain?.provider || "auto");
+  const cards = [
+    { id: "ollama", label: "Ollama", configured: true, model: active === "ollama" ? state.brain?.model : "local, no key", keyMask: "LOCAL", kind: "local" },
+    ...catalog,
+  ];
+  grid.innerHTML = cards
+    .map(
+      (entry) => `<button type="button" class="provider-card ${entry.id === active ? "active" : ""}" data-provider="${esc(entry.id)}">
+        <span class="provider-name">${esc(entry.label)}</span>
+        <span class="badge ${entry.configured ? "ok" : "bad"}">${entry.configured ? "READY" : "NO KEY"}</span>
+        <span class="micro dim">${esc(entry.model || entry.defaultModel || "choose a model")}</span>
+        <span class="micro provider-meta">${esc(entry.keyMask || entry.kind || "")}</span>
+      </button>`
+    )
+    .join("");
+  const badge = $("#model-active");
+  if (badge) {
+    const brain = state?.brain || {};
+    badge.textContent = brain.ready ? `${String(brain.provider).toUpperCase()} · ${brain.model}` : String(brain.provider || "NONE").toUpperCase();
+    badge.className = "badge " + (brain.ready ? "ok" : "bad");
+  }
+}
+
+function applyProviderToForm(id) {
+  const info = providerInfo(id);
+  const provider = $("#cfg-provider");
+  if (!provider) return;
+  provider.value = id;
+  if (!info) return;
+  $("#cfg-model").value = info.model || "";
+  $("#cfg-model").placeholder = info.defaultModel || "model name";
+  $("#cfg-base").value = info.baseUrl && info.baseUrl !== info.defaultBase ? info.baseUrl : "";
+  $("#cfg-base").placeholder = info.baseUrl || info.defaultBase || "https://…/v1";
+  $("#cfg-key").value = "";
+  $("#cfg-key").placeholder = info.keyMask ? `SAVED · ${info.keyMask} — leave blank to keep it` : "paste the provider key";
+  $("#provider-test-state").textContent = `${String(info.label || id).toUpperCase()} SELECTED. SAVE TO MAKE IT THE ACTIVE BRAIN.`;
+}
+
 function fillHubConfig(state) {
   $("#cfg-name").value = state.hub.name || "";
   const local = Boolean(store.lockInfo?.local);
@@ -621,9 +674,15 @@ function fillHubConfig(state) {
       : "OPEN MODE AND CODE CHANGES CAN ONLY BE MADE ON THE HUB PC.";
   }
   const brain = state.brain || {};
-  $("#cfg-provider").value = brain.provider || "auto";
-  $("#cfg-model").value = brain.requested || "";
-  $("#cfg-base").value = brain.base && !brain.base.includes("11434") ? brain.base : "";
+  const activeProvider = String(state.providers?.active?.provider || brain.provider || "auto");
+  if (!document.activeElement?.closest(".model-config")) {
+    $("#cfg-provider").value = activeProvider;
+    $("#cfg-model").value = brain.requested || brain.model || "";
+    $("#cfg-base").value = brain.base && !brain.base.includes("11434") ? brain.base : "";
+    const info = providerInfo(activeProvider === "auto" ? (brain.provider || "openai") : activeProvider);
+    const keyNote = $("#cfg-key");
+    if (keyNote) keyNote.placeholder = info?.keyMask ? `SAVED · ${info.keyMask} — leave blank to keep it` : "paste the provider key";
+  }
   renderModelPicker(brain);
 }
 
@@ -2780,8 +2839,72 @@ $("#cfg-model-pick").addEventListener("change", (event) => {
   const model = event.target.value;
   if (!model) return;
   $("#cfg-model").value = model;
-  void saveSettings({ brain: { model, provider: "ollama" } });
-  toast(`Brain → ${model}`, 3200);
+  void saveSettings({ brain: { model, provider: $("#cfg-provider").value } });
+  toast(`Model → ${model}`, 3200);
+});
+
+$("#cfg-provider")?.addEventListener("change", (event) => applyProviderToForm(event.target.value));
+
+$("#provider-grid")?.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-provider]");
+  if (!card) return;
+  applyProviderToForm(card.dataset.provider);
+});
+
+$("#cfg-models-load")?.addEventListener("click", async () => {
+  const provider = $("#cfg-provider").value;
+  const pick = $("#cfg-model-pick");
+  const note = $("#provider-test-state");
+  if (provider === "ollama") {
+    const brain = store.state?.brain || {};
+    const models = Array.isArray(brain.models) ? brain.models : [];
+    pick.innerHTML = models.length ? models.map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join("") : `<option value="">no local models installed</option>`;
+    pick.disabled = !models.length;
+    note.textContent = models.length ? `${models.length} LOCAL MODEL${models.length === 1 ? "" : "S"} FOUND.` : "OLLAMA HAS NO MODELS PULLED YET.";
+    return;
+  }
+  pick.disabled = true;
+  pick.innerHTML = `<option value="">loading…</option>`;
+  try {
+    const result = await api(`/api/providers?models=1&provider=${encodeURIComponent(provider)}`);
+    const models = Array.isArray(result.models) ? result.models : [];
+    pick.innerHTML = models.length
+      ? models.map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join("")
+      : `<option value="">${esc(result.modelsError || "the provider returned no model list — type one above")}</option>`;
+    pick.disabled = !models.length;
+    note.textContent = models.length ? `${models.length} MODELS RETURNED BY ${provider.toUpperCase()}.` : String(result.modelsError || "NO MODEL LIST. TYPE A MODEL NAME AND TEST IT.").toUpperCase();
+  } catch (error) {
+    pick.innerHTML = `<option value="">could not load models</option>`;
+    note.textContent = String(error.message || error).toUpperCase();
+  }
+});
+
+$("#cfg-test")?.addEventListener("click", async () => {
+  const button = $("#cfg-test");
+  const note = $("#provider-test-state");
+  const provider = $("#cfg-provider").value;
+  if (provider === "ollama" || provider === "off" || provider === "auto") {
+    note.textContent = "CHOOSE ONE REMOTE PROVIDER TO TEST. LOCAL OLLAMA IS PROBED AUTOMATICALLY.";
+    return;
+  }
+  button.setAttribute("aria-busy", "true");
+  note.textContent = "SENDING A REAL TEST MESSAGE…";
+  try {
+    const result = await api("/api/providers/test", {
+      method: "POST",
+      body: {
+        provider,
+        model: $("#cfg-model").value.trim(),
+        baseUrl: $("#cfg-base").value.trim(),
+        apiKey: $("#cfg-key").value.trim(),
+      },
+    });
+    note.textContent = `READY · ${String(result.provider).toUpperCase()} · ${result.model} · ${result.latencyMs} ms${result.vision ? " · VISION" : ""}${result.tools ? " · TOOLS" : ""}`;
+  } catch (error) {
+    note.textContent = String(error.message || error).toUpperCase();
+  } finally {
+    button.removeAttribute("aria-busy");
+  }
 });
 
 $("#sys-devices")?.addEventListener("click", async (event) => {
