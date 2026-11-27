@@ -66,7 +66,18 @@ test("the Hub package contains a real launcher, the server and the app shell", (
     for (const file of ["server.mjs", "version.json", "lib/brain.mjs", "lib/audio-sources.mjs", "public/index.html", "public/app.js", "public/screen-coords.mjs", "Start Athena.cmd", "README.txt", "BUILD-INFO.json"]) {
       assert.ok(fs.existsSync(path.join(built.folder, file)), `missing ${file}`);
     }
-    if (process.platform === "win32") assert.ok(built.exe && fs.existsSync(built.exe), "ATHENA Hub.exe was compiled");
+    if (process.platform === "win32") {
+      assert.ok(built.exe && fs.existsSync(built.exe), "ATHENA Hub.exe was compiled");
+      for (const file of ["Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll", "assets/athena.ico"]) {
+        assert.ok(fs.existsSync(path.join(built.folder, file)), `the desktop package is missing ${file}`);
+      }
+    }
+    const launcher = fs.readFileSync(new URL("../tools/hub-launcher.cs", import.meta.url), "utf8");
+    assert.match(launcher, /using Microsoft\.Web\.WebView2\.WinForms/);
+    assert.match(launcher, /new WebView2\(\)/);
+    assert.match(launcher, /NotifyIcon/);
+    assert.match(launcher, /FormClosing[\s\S]{0,500}HideWindow\(\)/);
+    assert.doesNotMatch(launcher, /--app=/, "the packaged Hub must not present a browser app window as its desktop app");
     assert.match(fs.readFileSync(path.join(built.folder, "README.txt"), "utf8"), /protocol/);
   } finally {
     removeDir(dir);

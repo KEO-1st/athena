@@ -47,6 +47,7 @@ const store = {
   chatId: "",
   busy: false,
   stream: null,
+  askAbort: null,
 };
 
 const CHAT_KEY = "athena.chat";
@@ -280,14 +281,57 @@ async function unlock() {
 
 /* ─────────────────────────────────────────────────────────── state */
 
+let lastStateAt = 0;
+
 async function loadState() {
   try {
     store.state = await api("/api/state");
+    lastStateAt = Date.now();
     render();
   } catch (error) {
     if (!String(error.message).includes("Locked")) toast(error.message);
   }
 }
+
+/** The header tells the truth about the live link, not a decorative badge. */
+function renderLinkState() {
+  const el = $("#top-signal");
+  if (!el) return;
+  const open = store.stream?.readyState === 1;
+  const stale = !lastStateAt || Date.now() - lastStateAt > 25_000;
+  const offline = !navigator.onLine;
+  el.classList.toggle("warn", offline || stale);
+  el.innerHTML = offline
+    ? `<i class="dot"></i>OFFLINE`
+    : stale
+      ? `<i class="dot"></i>RECONNECTING`
+      : open
+        ? `<i class="dot live"></i>SIGNAL LOCKED`
+        : `<i class="dot"></i>CONNECTING`;
+}
+
+/* SSE is the fast path. This is the safety net: if a ticket expires, a laptop
+   sleeps, or a proxy drops the stream, the workspace still refreshes instead
+   of looking frozen until the user presses SYNC. */
+function startStateWatch() {
+  window.setInterval(() => {
+    if (!store.token || document.visibilityState === "hidden") return;
+    if (Date.now() - lastStateAt > 20_000) void loadState();
+    if (!store.stream || store.stream.readyState === 2) {
+      streamRetry = 0;
+      void connectStream();
+    }
+    renderLinkState();
+  }, 10_000);
+}
+
+window.addEventListener("online", () => {
+  if (!store.token) return;
+  void loadState();
+  void connectStream();
+  renderLinkState();
+});
+window.addEventListener("offline", renderLinkState);
 
 function nodeBusy(node) {
   return Boolean(node.status?.tasks?.some((task) => task.state === "running"));
@@ -325,12 +369,14 @@ function render() {
   $("#brain-line").textContent = brain?.ready
     ? `BRAIN · ${String(brain.provider).toUpperCase()} · ${brain.model}`
     : "BRAIN · BUILT-IN COMMANDS ONLY";
+  renderLinkState();
   $("#brain-detail").textContent = brain?.detail || "—";
   $("#speak-toggle").innerHTML = `VOICE <b>${store.speak ? "ON" : "OFF"}</b>`;
   $("#speak-toggle").classList.toggle("on", store.speak);
 
   renderVoicePanel();
   renderOrbNodes(nodes);
+  renderHomeNodes(nodes);
   renderNodes(nodes, state);
   renderScreens();
   renderJobs(state.jobs || []);
@@ -354,6 +400,27 @@ function renderOrbNodes(nodes) {
     dot.title = `${node.name}${node.status?.gpu?.name ? " · " + node.status.gpu.name : ""}`;
     wrap.appendChild(dot);
   });
+}
+
+function renderHomeNodes(nodes) {
+  const box = $("#home-nodes");
+  if (!box) return;
+  box.innerHTML = nodes
+    .slice(0, 4)
+    .map((node) => {
+      const status = node.status || {};
+      const cpuValue = status.hardware?.cpu?.utilizationPct ?? status.cpu?.usage ?? status.cpu?.percent;
+      const cpu = Number(cpuValue);
+      const detail = node.online
+        ? [cpuValue != null && Number.isFinite(cpu) ? `CPU ${Math.round(cpu)}%` : "", status.gpu?.name ? String(status.gpu.name).slice(0, 22) : ""].filter(Boolean).join(" · ") || "ONLINE"
+        : "OFFLINE";
+      return `<div class="home-node-row" data-node="${esc(node.id)}">
+        <span class="dot ${node.online ? "live" : ""}"></span>
+        <b title="${esc(node.name)}">${esc(node.alias || node.name)}</b>
+        <span class="${node.online ? "live" : ""}">${esc(detail || "NO DATA")}</span>
+      </div>`;
+    })
+    .join("");
 }
 
 function renderNodes(nodes, state) {
@@ -1234,6 +1301,17 @@ async function submitAsk(text) {
   let streamed = "";
   let streamSpoken = 0;
   let speechStreamed = false;
+  const controller = new AbortController();
+  store.askAbort = controller;
+  const startedAt = Date.now();
+  const cancel = $("#cancel-ask");
+  cancel.hidden = false;
+  cancel.textContent = "STOP";
+  const clock = window.setInterval(() => {
+    cancel.textContent = `STOP · ${Math.round((Date.now() - startedAt) / 1000)}S`;
+  }, 1000);
+  /* Hard ceiling: no spinner may outlive the server's own turn budget. */
+  const ceiling = window.setTimeout(() => controller.abort("timeout"), 180_000);
   try {
     const res = await fetch("/api/ask", {
       method: "POST",
@@ -1243,9 +1321,7 @@ async function submitAsk(text) {
       },
       body: JSON.stringify({ text: value, history: store.history.slice(-12), stream: true }),
       cache: "no-store",
-      /* A multi-step task may need several provider rounds; the Hub budgets
-         them to 170s, so allow it to finish before the browser gives up. */
-      signal: AbortSignal.timeout(180_000),
+      signal: controller.signal,
     });
     if (res.status === 401) {
       lock();
@@ -1329,14 +1405,26 @@ async function submitAsk(text) {
     pending.remove();
     if (streamed) live.commit(streamed);
     else live.wrap.remove();
-    const message = error?.name === "TimeoutError" || /aborted/i.test(String(error?.message || ""))
-      ? "ATHENA did not answer within three minutes. The provider or Node did not respond; the request was stopped."
-      : String(error.message || error);
+    const stopped = controller.signal.reason === "cancel";
+    const timedOut = controller.signal.reason === "timeout" || error?.name === "TimeoutError" || /aborted/i.test(String(error?.message || ""));
+    const message = stopped
+      ? "Stopped. The request was cancelled; no result is being claimed."
+      : timedOut
+        ? "ATHENA did not answer within three minutes. The provider or Node did not respond; the request was stopped. Check the brain in SYSTEM → MODEL CENTER."
+        : String(error.message || error);
     addMessage("athena", message);
   } finally {
+    window.clearInterval(clock);
+    window.clearTimeout(ceiling);
+    cancel.hidden = true;
+    store.askAbort = null;
     store.busy = false;
   }
 }
+
+$("#cancel-ask")?.addEventListener("click", () => {
+  if (store.askAbort) store.askAbort.abort("cancel");
+});
 
 /* ─────────────────────────────────────────────────────────── speech in */
 
@@ -1426,6 +1514,7 @@ async function connectStream() {
     stream.addEventListener("state", (event) => {
       try {
         store.state = JSON.parse(event.data);
+        lastStateAt = Date.now();
         streamRetry = 0;
         render();
       } catch {
@@ -2262,6 +2351,8 @@ $("#controllers-btn")?.addEventListener("click", () => {
   setTimeout(() => $("#controller-management")?.scrollIntoView({ block: "center", behavior: "smooth" }), 80);
 });
 
+$(".home-network-link")?.addEventListener("click", () => switchView("nodes"));
+
 $("#new-chat")?.addEventListener("click", newChat);
 $("#clear-chat")?.addEventListener("click", clearChat);
 $("#chat-history-btn")?.addEventListener("click", () => {
@@ -3046,6 +3137,7 @@ async function boot() {
     $("#app").hidden = true;
     $("#code").focus();
   }
+  startStateWatch();
   /* waking the phone from the background is when a phone is most stale */
   document.addEventListener("visibilitychange", () => {
     if (!store.token) return;

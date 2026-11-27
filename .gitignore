@@ -28,5 +28,9 @@ desktop.ini
 # built distribution folders and zips (recreate with npm run package)
 dist/
 
+# local screenshots, CDP helpers and downloaded build SDKs
+.freebuff/
+tools/.cache/
+
 # the independent Node product has its own repository
 athena-node/

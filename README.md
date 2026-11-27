@@ -27,14 +27,23 @@ and GitHub workflow, so any coding agent or developer can continue from
 
 ## 1 · Start the hub (this PC)
 
+From a built Windows package, double-click **ATHENA Hub.exe**. It opens the
+Hub's own desktop window (WebView2), starts the bundled runtime, and lives in
+the notification area. Closing or minimising the window hides it to the tray;
+phones and Nodes stay connected. Use the tray menu to show it again, copy the
+address, restart the server, or **Quit**.
+
+From source:
+
 ```
-node athena/server.mjs
+node server.mjs
 ```
 
 or double-click **Start Athena.cmd** on Windows (installs Node with winget if
-missing).
+missing). That path is a development console window, not the packaged desktop
+window.
 
-It prints something like:
+The server prints something like:
 
 ```
    hub         keoja-pc
@@ -46,12 +55,14 @@ It prints something like:
 Open that address. On the PC the app unlocks itself — there is nothing to type.
 On a phone you need that **access code** once; it is remembered afterwards.
 
-**Where the code is:** the same black ATHENA window, printed in a box, and also
-saved as plain text in `athena/data/access-code.txt`. If you lost the window,
-just run **Start Athena.cmd** again: it prints the code before opening the app.
+**Where the code is:** the Hub's SYSTEM view, the packaged app's tray menu, and
+`data/access-code.txt` beside the server. From source it is also printed in the
+console. On the Hub PC the app unlocks itself, so a lost code does not lock you
+out.
 
-**Where the hub is:** the black window. It *is* the hub — no extra program.
-Closing it stops ATHENA for everyone. If you close it, start it again.
+**Where the hub is:** the Hub window and the tray icon. Closing the window does
+not stop the server for controllers. **Quit** from the tray (or stop the
+console when running from source) is the intentional stop.
 
 ---
 
@@ -68,7 +79,9 @@ The Node is its own product and repository:
 4. In the hub: **NODES → SCAN**, find the node (GPU and VRAM shown), type its
    code, press **LINK**.
 
-The Node lives in the notification area. Its id, pairing token, settings and
+The Node lives in the notification area and its panel is its own WebView2
+desktop window, not a browser `--app` tab. Closing or minimising that window
+hides it to the tray; the agent continues. Its id, pairing token, settings and
 logs live in `%LOCALAPPDATA%\ATHENA Node`, so installer updates and uninstalls
 keep the machine paired. The tray menu opens, restarts, finds the data folder or
 stops it. Updates are a deliberate download, not a silent replacement.
@@ -78,6 +91,23 @@ with the same code. Hub and Node versions are independent; Hub 3.3 accepts Node
 protocol 1, including existing 0.2 Nodes. A new 0.3 Node opens one window, keeps
 running after the panel closes, and starts with remote shell, input and shutdown
 switched off until someone at that PC enables them under **PERMISSIONS**.
+
+---
+
+### Build the Windows packages
+
+```
+node tools/package.mjs --only hub --out dist
+npm run package
+```
+
+The first command builds the Hub folder, its WebView2 desktop launcher and the
+portable zip. The second builds this repo's Node package. The independent Node
+product is built in `athena-node/` with `npm run package`, which also emits the
+installer and `SHA256SUMS.txt`. Packaging fetches the Microsoft WebView2 managed
+SDK once into a local cache; the WebView2 runtime itself is part of Windows
+10/11. Both launchers are compiled with the Windows built-in C# compiler; no
+npm install and no Visual Studio are required.
 
 ---
 

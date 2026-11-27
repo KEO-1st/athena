@@ -53,7 +53,11 @@ export function screenPoint(img, event) {
  */
 export function screenProfile({ focused = false, hidden = false, coarse = false, viewportWidth = 1200 } = {}) {
   if (hidden) return { fps: 0, intervalMs: 0, width: 0, active: false };
-  if (focused) return { fps: 30, intervalMs: 34, width: 1600, active: true };
+  /* Focused capture measured ~10.7 fps at 1280px versus ~9.8 fps at 1600px on
+     the reference Windows node. 1280 is also less bandwidth for the same
+     readable desktop; the budget stays 30 because a faster capture backend
+     should not be capped by the controller. */
+  if (focused) return { fps: 30, intervalMs: 34, width: 1280, active: true };
   const mobile = coarse || Number(viewportWidth) < 760;
   return mobile
     ? { fps: 10, intervalMs: 100, width: 960, active: true }

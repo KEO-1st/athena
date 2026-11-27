@@ -31,6 +31,62 @@ const CSC = [
   path.join(process.env.WINDIR || "C:\\Windows", "Microsoft.NET", "Framework", "v4.0.30319", "csc.exe"),
 ].find((file) => fs.existsSync(file));
 
+const WEBVIEW2_VERSION = "1.0.4370.26";
+
+/* The launchers are native WinForms windows with an embedded WebView2. The SDK
+   is fetched once into a cache; it is not an npm dependency and never ends up
+   as source in the product. Runtime WebView2 itself ships with Windows 10/11. */
+function ensureWebView2() {
+  const candidates = [
+    path.join(ROOT, "tools", "webview2"),
+    path.join(ROOT, "tools", ".cache", "webview2", "extracted"),
+    path.join(os.tmpdir(), "athena-webview2", WEBVIEW2_VERSION),
+  ];
+  const valid = (dir) =>
+    fs.existsSync(path.join(dir, "lib", "net462", "Microsoft.Web.WebView2.Core.dll")) &&
+    fs.existsSync(path.join(dir, "lib", "net462", "Microsoft.Web.WebView2.WinForms.dll")) &&
+    fs.existsSync(path.join(dir, "build", "native", "x64", "WebView2Loader.dll"));
+  const found = candidates.find(valid);
+  if (found) return found;
+
+  const dir = path.join(os.tmpdir(), "athena-webview2", WEBVIEW2_VERSION);
+  fs.mkdirSync(dir, { recursive: true });
+  const zipFile = path.join(dir, "sdk.zip");
+  if (!fs.existsSync(zipFile)) {
+    const url = `https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/${WEBVIEW2_VERSION}/microsoft.web.webview2.${WEBVIEW2_VERSION}.nupkg`;
+    const script = [
+      "$ErrorActionPreference='Stop'",
+      `Invoke-WebRequest -UseBasicParsing -Uri '${url}' -OutFile '${zipFile.replace(/'/g, "''")}'`,
+    ].join("\n");
+    const fetched = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", timeout: 120_000 });
+    if (fetched.status !== 0 || !fs.existsSync(zipFile)) {
+      throw new Error(`Could not download the WebView2 SDK: ${fetched.stderr || fetched.stdout || "no file"}`);
+    }
+  }
+  if (!valid(dir)) {
+    const unpack = `Expand-Archive -LiteralPath '${zipFile.replace(/'/g, "''")}' -DestinationPath '${dir.replace(/'/g, "''")}' -Force`;
+    const expanded = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", unpack], { encoding: "utf8", timeout: 120_000 });
+    if (expanded.status !== 0 || !valid(dir)) {
+      throw new Error(`Could not extract the WebView2 SDK: ${expanded.stderr || expanded.stdout || "missing files"}`);
+    }
+  }
+  return dir;
+}
+
+function installWebView2(folder) {
+  const sdk = ensureWebView2();
+  const files = [
+    path.join(sdk, "lib", "net462", "Microsoft.Web.WebView2.Core.dll"),
+    path.join(sdk, "lib", "net462", "Microsoft.Web.WebView2.WinForms.dll"),
+    path.join(sdk, "build", "native", "x64", "WebView2Loader.dll"),
+  ];
+  for (const file of files) copy(file, path.join(folder, path.basename(file)));
+  return {
+    core: files[0],
+    winforms: files[1],
+  };
+}
+
 const NODE_FILES = [
   "athena-node.mjs",
   "run-node.cmd",
@@ -234,12 +290,26 @@ export function buildHubPackage({ outDir = DIST, zip: shouldZip = true, runtime 
   for (const name of HUB_FILES) copy(path.join(ROOT, name), path.join(folder, name));
   fs.cpSync(path.join(ROOT, "lib"), path.join(folder, "lib"), { recursive: true });
   fs.cpSync(path.join(ROOT, "public"), path.join(folder, "public"), { recursive: true });
+  fs.cpSync(path.join(ROOT, "assets"), path.join(folder, "assets"), { recursive: true });
 
   let exe = null;
   if (CSC) {
+    const sdk = installWebView2(folder);
     const source = path.join(ROOT, "tools", "hub-launcher.cs");
     exe = path.join(folder, "ATHENA Hub.exe");
-    const compiled = spawnSync(CSC, ["/nologo", "/optimize+", "/target:exe", `/out:${exe}`, source], { encoding: "utf8" });
+    const compiled = spawnSync(CSC, [
+      "/nologo",
+      "/optimize+",
+      "/target:winexe",
+      `/out:${exe}`,
+      "/r:System.dll",
+      "/r:System.Windows.Forms.dll",
+      "/r:System.Drawing.dll",
+      `/r:${sdk.core}`,
+      `/r:${sdk.winforms}`,
+      `/win32icon:${path.join(ROOT, "assets", "athena.ico")}`,
+      source,
+    ], { encoding: "utf8" });
     if (compiled.status !== 0) throw new Error(`Could not compile ATHENA Hub.exe: ${compiled.stderr || compiled.stdout}`);
   }
 
@@ -275,10 +345,11 @@ PORTABLE, NOT AN INSTALLER
   this whole folder. Data lives in data\ and moves with it.
 
 START
-  Double-click "ATHENA Hub.exe". That is the hub window; keep it open.
+  Double-click "ATHENA Hub.exe". That is the Hub's own desktop window, hosted
+  in WebView2. Closing or minimising it hides the Hub to the notification area;
+  phones and Nodes stay connected. Use the tray icon to show it again or Quit.
   If your antivirus dislikes a new unsigned .exe, "Start Athena.cmd" runs the
-  same server with the bundled runtime. The launcher waits for the health
-  endpoint before opening the browser, so a slow first start is not a dead page.
+  same server with the bundled runtime in a console window.
 
 WHAT IS IN THIS FOLDER
   ATHENA Hub.exe     launcher (no install, no registry changes)

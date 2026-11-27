@@ -254,6 +254,149 @@ input[type="range"] { min-height: 20px; }
   .msg-shots img { max-height: 56vh; }
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   HOME · chat-first command workspace
+
+   The conversation is the product. The network summary is a compact
+   instrument panel beside it, not a landing page that pushes the composer
+   below the fold. On phones the summary collapses to a strip and the
+   composer stays fixed above the tab bar.
+   ═══════════════════════════════════════════════════════════════════ */
+
+section.view[data-view="home"] {
+  padding-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.home-chat-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+.home-chat-head h2 {
+  font-size: clamp(22px, 2.4vw, 30px);
+  letter-spacing: 0.04em;
+  line-height: 1.15;
+  margin: 2px 0 4px;
+}
+.home-chat-head #net-line { letter-spacing: 0.12em; }
+
+.home-hero { clip-path: none; }
+.home-hero .ticker,
+.home-hero .hero-grid,
+.home-hero .hero-beam { display: none; }
+.home-hero .hero-bar { padding-bottom: 10px; }
+.home-hero .hero-main {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-4);
+  padding: var(--space-4) 0 var(--space-3);
+}
+.home-hero .core-stage { padding: 0; }
+.home-hero .core-stage .core { --core: min(44vw, 190px); animation-duration: 16s; }
+.home-hero .stage-tag { display: none; }
+.home-hero .hero-copy { align-items: flex-start; text-align: left; gap: 10px; }
+.home-hero .hero-copy .display { display: none; }
+.home-hero .hero-tag { max-width: none; font-size: 12px; }
+.home-hero .hero-stats { max-width: none; }
+.home-hero .stat { align-items: flex-start; padding-left: 10px; }
+.home-hero .stat strong { font-size: 24px; }
+
+.home-nodes { display: flex; flex-direction: column; width: 100%; border-top: 1px solid var(--line); }
+.home-nodes:empty { display: none; }
+.home-node-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.home-node-row .dot { flex: 0 0 auto; }
+.home-node-row b {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+}
+.home-node-row span { font-family: var(--mono); font-size: 8px; letter-spacing: 0.1em; color: var(--dim); }
+.home-node-row span.live { color: var(--accent-l); }
+.home-network-link { align-self: flex-start; }
+
+.composer-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.composer-foot .hint { min-width: 0; }
+#cancel-ask { color: var(--danger, #e98b8b); border-color: rgba(233, 139, 139, 0.35); }
+
+@media (min-width: 1024px) {
+  #views:has(section.view[data-view="home"]:not([hidden])) { overflow: hidden; }
+
+  section.view[data-view="home"] {
+    height: 100%;
+    max-width: none;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    column-gap: var(--space-5);
+    row-gap: 0;
+    overflow: hidden;
+  }
+  section.view[data-view="home"] > .home-chat-head { grid-column: 1; grid-row: 1; }
+  section.view[data-view="home"] > .chat-history-panel { grid-column: 1; grid-row: 2; }
+  section.view[data-view="home"] > .chat {
+    grid-column: 1;
+    grid-row: 3;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 16px 6px 12px 0;
+    scrollbar-gutter: stable;
+  }
+  section.view[data-view="home"] > .composer {
+    grid-column: 1;
+    grid-row: 4;
+    position: static;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    transform: none;
+    width: 100%;
+    background: linear-gradient(to top, var(--surface-0) 72%, transparent);
+    padding: 10px 0 2px;
+  }
+  section.view[data-view="home"] > .home-hero {
+    grid-column: 2;
+    grid-row: 1 / -1;
+    align-self: stretch;
+    overflow-y: auto;
+    min-height: 0;
+    margin-bottom: var(--space-2);
+  }
+  .home-hero .hero-main { flex: 1; }
+  .home-hero .hero-copy { margin-top: auto; }
+}
+
+@media (max-width: 1023px) {
+  section.view[data-view="home"] { padding-bottom: 230px; }
+  .home-hero .core-stage .core { --core: min(32vw, 150px); }
+  .home-hero .hero-main { flex-direction: row; align-items: center; gap: var(--space-4); }
+  .home-hero .hero-copy { flex: 1; }
+  .home-hero .hero-tag { display: none; }
+  .home-hero .home-nodes { display: none; }
+  .home-hero .hero-bar #net-line { display: none; }
+}
+
 /* Reduced motion and battery: the rail, transitions and hover lifts are cheap,
    but a device that asks for less motion gets a completely static shell. */
 @media (prefers-reduced-motion: reduce) {

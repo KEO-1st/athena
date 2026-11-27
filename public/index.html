@@ -193,7 +193,7 @@
     </div>
     <div class="top-mid">
       <span class="top-slash"></span>
-      <span class="micro top-signal"><i class="dot"></i>SIGNAL LOCKED</span>
+      <span class="micro top-signal" id="top-signal"><i class="dot"></i>SIGNAL LOCKED</span>
     </div>
     <div class="top-right">
       <button class="pill" id="speak-toggle" title="Spoken replies">VOICE <b>OFF</b></button>
@@ -204,11 +204,11 @@
   <main id="views">
     <!-- HOME -->
     <section class="view" data-view="home">
-      <div class="hero">
+      <div class="hero home-hero">
         <div class="hero-grid" aria-hidden="true"></div>
         <div class="hero-beam" aria-hidden="true"></div>
         <div class="hero-bar">
-          <p class="micro kicker">SYS.33 <span class="sep">//</span> ATHENA HUB</p>
+          <p class="micro kicker">NETWORK <span class="sep">//</span> LIVE STATE</p>
           <span class="hero-barcode" aria-hidden="true"></span>
           <p class="micro dim" id="net-line">STANDING BY</p>
         </div>
@@ -276,6 +276,8 @@
               <span class="dot" id="net-dot"></span>
               <span class="micro" id="net-caption">THE PANTHEON IS QUIET</span>
             </div>
+            <div class="home-nodes" id="home-nodes"></div>
+            <button class="btn tiny home-network-link" type="button" data-nav="nodes">MANAGE MACHINES →</button>
           </div>
         </div>
 
@@ -287,8 +289,12 @@
         </div>
       </div>
 
-      <div class="chat-head">
-        <span class="micro dim" id="chat-title">CONVERSATION</span>
+      <div class="chat-head home-chat-head">
+        <div>
+          <p class="micro gold-line">COMMAND</p>
+          <h2>What should we do?</h2>
+          <span class="micro dim" id="chat-title">CONVERSATION</span>
+        </div>
         <div class="chat-tools">
           <button class="btn tiny solid" id="new-chat">+ NEW CHAT</button>
           <button class="btn tiny" id="chat-history-btn">HISTORY</button>
@@ -321,7 +327,10 @@
           <input id="ask" placeholder="Tell Athena what to do…" autocomplete="off" spellcheck="false" />
           <button type="submit" class="send" aria-label="Send">↗</button>
         </form>
-        <p class="micro dim hint" id="brain-line">BRAIN · CHECKING</p>
+        <div class="composer-foot">
+          <p class="micro dim hint" id="brain-line">BRAIN · CHECKING</p>
+          <button class="btn tiny" type="button" id="cancel-ask" hidden>STOP</button>
+        </div>
       </div>
     </section>
 
