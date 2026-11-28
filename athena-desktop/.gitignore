@@ -1,0 +1,7 @@
+# Godot editor state and local build output
+.godot/
+build/
+bin/
+obj/
+*.user
+*.tmp

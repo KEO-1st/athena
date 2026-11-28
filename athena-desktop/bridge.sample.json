@@ -1,0 +1,18 @@
+{
+  "source": "future-hub-adapter",
+  "prototype": true,
+  "hub": {
+    "status": "not connected",
+    "machines": 1
+  },
+  "node": {
+    "name": "AEGIS-07",
+    "cpuPercent": 42,
+    "gpuPercent": 61,
+    "memoryGb": 9.4,
+    "memoryTotalGb": 16,
+    "temperatureC": 58,
+    "state": "demo telemetry"
+  },
+  "updatedUnix": 0
+}
